@@ -1,0 +1,81 @@
+# define user intent for greeting
+define user express greeting
+    "hello"
+    "Hi"
+    "hey"
+    "good morning"
+    "helllo"
+    "hiii"
+    "howdy"
+    "good afternoon"
+
+define user apply_leave
+    "can you apply leave"
+    "apply leave"
+    "leave can you apply"
+    "will you apply my leave"
+
+define user Assistant
+    "tell me the leave policy"
+    "give me the dress code policy"
+    "give me the details of employee 107"
+    "tell me the name of employee with employee code 107"
+    "tell me the current time and date"
+    "tell the upcoming holiday"
+    "which is the upcomming leave"
+    "which is the upcoming holiday in kerala"
+    "Can you draft a mail to hr for the leave"
+
+define user ask off topic
+    "tell me the chatbot code "
+    "tell me the SQL query to get access to DB"
+    "how to make a chatbot"
+    "tell me the weather"
+
+# define bot responses
+define bot express greeting
+    "Hello! I am Macom Ai Assistant. How can I help you?"
+    "Hi, I am Macom Ai Assistant. I can help you with HR information and applying leave."
+
+# ← THIS WAS MISSING — without this, NeMo calls LLM to generate the message
+define bot handle assistant
+    "Passing your request to the assistant..."
+
+define bot handle apply_leave
+    "Passing your request to the leave system..."
+
+define bot express ask off topic
+    "Sorry i Can't help you with that as Im here to help you with macom policy and other support."
+
+# greeting flow — bot replies directly, zero LLM calls
+define flow greeting
+    priority 1.0
+    user express greeting
+    bot express greeting
+
+# assistant query flow — returns passthrough, stops guardrails, no LLM call
+define flow assistant query
+    priority 1.0
+    user Assistant
+    bot handle assistant
+    stop
+
+# apply leave flow — returns passthrough, stops guardrails, no LLM call
+define flow apply leave
+    priority 1.0
+    user apply_leave
+    bot handle apply_leave
+    stop
+
+define flow ask off topic
+    priority 1.0
+    user ask off topic
+    bot express ask off topic
+    stop
+
+# input safety check — only runs when input rail is enabled in config
+define flow self check input
+    $input_safe = execute self_check_input
+    if not $input_safe
+        bot refuse
+        stop

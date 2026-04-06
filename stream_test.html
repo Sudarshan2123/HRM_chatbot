@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Stream Test</title>
+    <style>
+        body { font-family: monospace; padding: 20px; background: #1e1e1e; color: #d4d4d4; }
+        #output {
+            white-space: pre-wrap;
+            border: 1px solid #444;
+            padding: 15px;
+            min-height: 200px;
+            background: #252526;
+            border-radius: 4px;
+            margin-top: 10px;
+        }
+        input {
+            width: 70%;
+            padding: 8px;
+            background: #3c3c3c;
+            border: 1px solid #555;
+            color: white;
+            border-radius: 4px;
+        }
+        button {
+            padding: 8px 16px;
+            background: #0e639c;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-left: 8px;
+        }
+        button:hover { background: #1177bb; }
+        .token     { color: #9cdcfe; }
+        .tool      { color: #dcdcaa; }
+        .done      { color: #4ec9b0; }
+        .guard     { color: #ce9178; }
+        .error     { color: #f44747; }
+        .interrupt { color: #ff9900; }
+        .you       { color: #569cd6; }
+        #interruptPanel {
+            display: none;
+            margin-top: 12px;
+            padding: 12px;
+            background: #2d2d00;
+            border: 1px solid #ff9900;
+            border-radius: 4px;
+        }
+        #interruptPanel p { margin: 0 0 8px; color: #ff9900; }
+        #interruptInput {
+            width: 60%;
+            padding: 8px;
+            background: #3c3c3c;
+            border: 1px solid #ff9900;
+            color: white;
+            border-radius: 4px;
+        }
+        #interruptSendBtn {
+            background: #cc7700;
+            margin-left: 8px;
+        }
+        #interruptSendBtn:hover { background: #ff9900; }
+    </style>
+</head>
+<body>
+    <h2>Live Stream Test</h2>
+    <input id="msg" type="text" placeholder="Type your message..." value="What is the leave policy?" />
+    <button id="sendBtn">Send</button>
+    <button id="clearBtn">Clear</button>
+    <div id="output">Output will appear here...</div>
+    <div id="interruptPanel">
+        <p id="interruptMsg">⚠ Awaiting your input:</p>
+        <input id="interruptInput" type="text" placeholder="Type your response (e.g. yes / no)" />
+        <button id="interruptSendBtn">Reply</button>
+    </div>
+
+    <script>
+        var threadId = "test-" + Math.random().toString(36).slice(2);
+        var output = document.getElementById("output");
+        var interruptPanel = document.getElementById("interruptPanel");
+        var interruptInput = document.getElementById("interruptInput");
+
+        document.getElementById("sendBtn").addEventListener("click", sendMessage);
+        document.getElementById("clearBtn").addEventListener("click", clearOutput);
+        document.getElementById("msg").addEventListener("keydown", function(e) {
+            if (e.key === "Enter") sendMessage();
+        });
+        document.getElementById("interruptSendBtn").addEventListener("click", sendResume);
+        interruptInput.addEventListener("keydown", function(e) {
+            if (e.key === "Enter") sendResume();
+        });
+
+        function showInterrupt(msg) {
+            document.getElementById("interruptMsg").textContent = "\u26a0 " + msg;
+            interruptPanel.style.display = "block";
+            interruptInput.value = "";
+            interruptInput.focus();
+        }
+
+        function hideInterrupt() {
+            interruptPanel.style.display = "none";
+        }
+
+        async function sendResume() {
+            var decision = interruptInput.value.trim();
+            if (!decision) return;
+            hideInterrupt();
+            output.innerHTML += "<br><span class='you'>You: " + decision + "</span><br>Assistant: ";
+
+            try {
+                var res = await fetch("/chat/resume", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ thread_id: threadId, decision: decision })
+                });
+                var data = await res.json();
+                if (data.status === "waiting_for_input") {
+                    output.innerHTML += "<span class='interrupt'>" + data.response + "</span>";
+                    showInterrupt(data.response);
+                } else {
+                    output.innerHTML += "<span class='token'>" + data.response + "</span>";
+                }
+                output.innerHTML += "<br><span class='done'>[done]</span><br>";
+                output.scrollTop = output.scrollHeight;
+            } catch (err) {
+                output.innerHTML += "<br><span class='error'>Resume failed: " + err.message + "</span><br>";
+            }
+        }
+
+        async function sendMessage() {
+            var msg = document.getElementById("msg").value.trim();
+            if (!msg) return;
+
+            output.innerHTML += "<br><span class='you'>You: " + msg + "</span><br>Assistant: ";
+
+            try {
+                console.log("Connecting to /chat/stream ...");
+
+                var res = await fetch("/chat/stream", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ message: msg, thread_id: threadId })
+                });
+
+                console.log("Response status:", res.status);
+
+                if (!res.ok) {
+                    var errText = await res.text();
+                    output.innerHTML += "<span class='error'>HTTP " + res.status + ": " + errText + "</span><br>";
+                    return;
+                }
+
+                var reader = res.body.getReader();
+                var decoder = new TextDecoder();
+                var buffer = "";
+
+                while (true) {
+                    var r = await reader.read();
+                    if (r.done) break;
+
+                    buffer += decoder.decode(r.value, { stream: true });
+
+                    var parts = buffer.split("\n\n");
+                    buffer = parts.pop();
+
+                    for (var i = 0; i < parts.length; i++) {
+                        var line = parts[i].trim();
+                        if (!line.startsWith("data: ")) continue;
+
+                        try {
+                            var evt = JSON.parse(line.slice(6));
+                            console.log("Event received:", evt);
+
+                            if (evt.type === "token") {
+                                output.innerHTML += "<span class='token'>" + evt.content + "</span>";
+                            } else if (evt.type === "tool_start") {
+                                output.innerHTML += "<br><span class='tool'>[tool] Calling: " + evt.tool + "...</span><br>";
+                            } else if (evt.type === "tool_end") {
+                                output.innerHTML += "<span class='tool'>[tool] Done: " + evt.tool + "</span><br>";
+                            } else if (evt.type === "guardrail") {
+                                output.innerHTML += "<span class='guard'>" + evt.content + "</span>";
+                            } else if (evt.type === "interrupt") {
+                                output.innerHTML += "<br><span class='interrupt'>[waiting] " + evt.content + "</span><br>";
+                                showInterrupt(evt.content);
+                            } else if (evt.type === "error") {
+                                output.innerHTML += "<br><span class='error'>[error] " + evt.content + "</span><br>";
+                            } else if (evt.type === "done") {
+                                output.innerHTML += "<br><span class='done'>[done]</span><br>";
+                            }
+
+                            output.scrollTop = output.scrollHeight;
+
+                        } catch (parseErr) {
+                            console.warn("Could not parse line:", line);
+                        }
+                    }
+                }
+
+            } catch (err) {
+                output.innerHTML += "<br><span class='error'>Fetch failed: " + err.message + "</span><br>";
+                console.error("Fetch error:", err);
+            }
+        }
+
+        function clearOutput() {
+            output.innerHTML = "Output will appear here...";
+            hideInterrupt();
+            threadId = "test-" + Math.random().toString(36).slice(2);
+        }
+    </script>
+</body>
+</html>

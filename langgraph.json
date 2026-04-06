@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "agent": "./app.py:create_intent_driven_agent"
+  },
+  "env": ".env"
+}
