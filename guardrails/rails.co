@@ -1,43 +1,70 @@
-# define user intent for greeting
+# ─── user intents ───────────────────────────────
+
 define user express greeting
     "hello"
     "Hi"
     "hey"
     "good morning"
-    "helllo"
-    "hiii"
-    "howdy"
-    "good afternoon"
+    "helloo"
+
+define user follow_up
+    "yes"
+    "yes please"
+    "sure"
+    "okay"
+    "any other particular section"
+    "go ahead"
+    "tell me more"
+    "more details"
+    "continue"
+    "elaborate"
+    "explain more"
+
+define user provide_parameter
+    "kerala"
+    "maharashtra"
+    "karnataka"
+    "tomorrow"
+    "from monday"
+    "medical reason"
+    "personal work"
+    "policy related"  # FIXED: Added missing closing quote
 
 define user apply_leave
-    "can you apply leave"
-    "apply leave"
-    "leave can you apply"
-    "will you apply my leave"
+    "apply for leave"
+    "submit my leave request"
+    "I want to apply leave"
+    "book a leave for me"
+    "request time off"
 
 define user Assistant
     "tell me the leave policy"
     "give me the dress code policy"
-    "give me the details of employee 107"
-    "tell me the name of employee with employee code 107"
+    "what is the leave policy"
     "tell me the current time and date"
+    "what is today's date"
     "tell the upcoming holiday"
-    "which is the upcomming leave"
-    "which is the upcoming holiday in kerala"
-    "Can you draft a mail to hr for the leave"
+    "which is the upcoming holiday"
+    "draft a mail to hr"
+    "draft an email to hr"
+    "write a leave email"
+    "write a mail for sick leave"
+    "help me write an email"
+    "what is the sick leave policy"
+    "how many leaves do I have"
 
 define user ask off topic
-    "tell me the chatbot code "
-    "tell me the SQL query to get access to DB"
+    "tell me the chatbot code"
+    "tell me the SQL query"
     "how to make a chatbot"
     "tell me the weather"
+    "write me a poem"
 
-# define bot responses
+# ─── bot responses ───────────────────────────────
+
 define bot express greeting
-    "Hello! I am Macom Ai Assistant. How can I help you?"
-    "Hi, I am Macom Ai Assistant. I can help you with HR information and applying leave."
+    "Hello! I am MACOM AI Assistant. How can I help you?"
 
-# ← THIS WAS MISSING — without this, NeMo calls LLM to generate the message
 define bot handle assistant
     "Passing your request to the assistant..."
 
@@ -45,22 +72,34 @@ define bot handle apply_leave
     "Passing your request to the leave system..."
 
 define bot express ask off topic
-    "Sorry i Can't help you with that as Im here to help you with macom policy and other support."
+    "Sorry, I can't help with that. I'm here to assist with MACOM policy and HR support."
 
-# greeting flow — bot replies directly, zero LLM calls
+# ─── flows ───────────────────────────────────────
+
 define flow greeting
     priority 1.0
     user express greeting
     bot express greeting
 
-# assistant query flow — returns passthrough, stops guardrails, no LLM call
 define flow assistant query
     priority 1.0
     user Assistant
     bot handle assistant
     stop
 
-# apply leave flow — returns passthrough, stops guardrails, no LLM call
+# HIGH PRIORITY: Parameters and follow-ups must rank higher than 'off topic'
+define flow handle parameters
+    priority 1.5
+    user provide_parameter
+    bot handle assistant
+    stop
+
+define flow handle vague follow up
+    priority 1.5
+    user follow_up
+    bot handle assistant
+    stop
+
 define flow apply leave
     priority 1.0
     user apply_leave
@@ -73,9 +112,16 @@ define flow ask off topic
     bot express ask off topic
     stop
 
-# input safety check — only runs when input rail is enabled in config
+# ─── fallback ───
+define flow default
+    priority 0.1
+    user ...
+    bot handle assistant  
+    stop
+
+# ─── Rails ───
 define flow self check input
     $input_safe = execute self_check_input
     if not $input_safe
-        bot refuse
+        bot express ask off topic  # FIXED: Use consistent refusal message
         stop

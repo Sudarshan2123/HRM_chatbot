@@ -181,6 +181,7 @@
                             } else if (evt.type === "guardrail") {
                                 output.innerHTML += "<span class='guard'>" + evt.content + "</span>";
                             } else if (evt.type === "interrupt") {
+                                if (evt.thread_id) threadId = evt.thread_id;
                                 output.innerHTML += "<br><span class='interrupt'>[waiting] " + evt.content + "</span><br>";
                                 showInterrupt(evt.content);
                             } else if (evt.type === "error") {

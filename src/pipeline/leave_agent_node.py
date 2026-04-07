@@ -9,6 +9,7 @@ import os
 from langgraph.types import interrupt
 from langgraph.graph import END, START, StateGraph
 from statenode import State as LeaveState
+from langchain_core.messages import AIMessage
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -26,7 +27,7 @@ _user_info: dict = {
     "roleName": None,   
 }
 LOGIN_CREDENTIALS = {
-    "username":   "1203",
+    "username":   "107",
     "password":   "123",
     "firmId":     3,
     "ipAddress":  "string",
@@ -120,7 +121,7 @@ def call_with_retry(method: str, url: str, **kwargs) -> dict:
 def leave_balance_node(state: LeaveState) -> dict:
     """Gets employee's leave balances and asks for confirmation."""
     print("Inside leave_balance_node")
-    user = get_user_info() 
+    login_and_get_token()
     result   = api_get_remaining_leave(state["emp_code"], state["firm_id"])
     print("got the result")
     print(result.get("data", []))
@@ -131,14 +132,17 @@ def leave_balance_node(state: LeaveState) -> dict:
         lines.append(f"  - {item['leaveName']}: {item['eligibleDays']} days")
     lines.append("\nWould you like to proceed? (yes / no)")
 
-    decision = interrupt({              # ← pauses correctly here
+    decision = interrupt({
         "message": "\n".join(lines),
         "action": "proceed_confirmation"
     })
 
     if decision.strip().lower() not in ["yes", "y"]:
-        return {"leave_step": "cancelled",
-                "response": "Leave application cancelled."}
+        return {
+            "leave_step": "cancelled",
+            "response": "Leave application cancelled.",
+            "messages": [AIMessage(content="Leave application cancelled.")]
+        }
 
     return {"leave_step": "awaiting_leave_type"}
 
@@ -153,19 +157,46 @@ def api_get_remaining_leave(emp_code: int, firm_id: int) -> dict:
         json={"firmId": firm_id, "empCode": emp_code}
     )
 
-def api_get_leave_types(emp_code: int, firm_id: int) -> dict:
-    return call_with_retry(
+def leave_types_node(state: LeaveState) -> dict:
+    result = call_with_retry(
         "POST",
         f"{LEAVE_BASE_URL}/EmployeeLeaveApplication/GetLeaveTypes",
-        json={"firmId": firm_id, "empCode": emp_code}
+        json={"firmId": state["firm_id"], "empCode": state["emp_code"]}
     )
+    types = result.get("data", [])
+    lines = ["Please select a leave type:"]
+    for i, t in enumerate(types, 1):
+        lines.append(f"  {i}. {t['leaveType']}")
 
-def api_check_eligibility(emp_code: int, firm_id: int, leave_type_id: int) -> dict:
-    return call_with_retry(
+    decision = interrupt({
+        "message": "\n".join(lines),
+        "action": "leave_type_selection"
+    })
+
+    if decision.isdigit() and 1 <= int(decision) <= len(types):
+        selected = types[int(decision) - 1]
+        return {
+            "leave_step": "awaiting_dates",
+            "leave_type_id":   selected["id"],
+            "leave_type_name": selected["leaveType"],
+            "messages": [AIMessage(content=f"You selected: {selected['leaveType']}")]
+        }
+    else:
+        return {
+            "leave_step": "cancelled",
+            "messages": [AIMessage(content="Invalid selection. Leave application cancelled.")]
+        }
+
+def api_check_eligibility(state: LeaveState) -> dict:
+    result = call_with_retry(
         "POST",
         f"{LEAVE_BASE_URL}/EmployeeLeaveApplication/IsLeaveEligible",
-        json={"firmId": firm_id, "empCode": emp_code, "id": leave_type_id}
+        json={"firmId": state["firm_id"], "empCode": state["emp_code"], "id": state["leave_type_id"]}
     )
+    from langchain_core.messages import AIMessage
+    eligible = result.get("data", False)
+    msg = "You are eligible for this leave type." if eligible else "You are not eligible for this leave type."
+    return {"messages": [AIMessage(content=msg)]}
 
 
 def get_user_info() -> dict:
@@ -199,11 +230,16 @@ def get_session(emp_code: int) -> dict:
 def leave_subgraph(checkpointer=None) -> StateGraph:
     sg = StateGraph(LeaveState)
     sg.add_node("leave_balance", leave_balance_node)
-    sg.add_node("leave_type", api_get_leave_types)
+    sg.add_node("leave_type", leave_types_node)
     sg.add_node("leave_Eligibility", api_check_eligibility)
     sg.add_edge(START, "leave_balance")
     sg.add_conditional_edges("leave_balance", route_leave, {
         "awaiting_leave_type": "leave_type",
         "cancelled":            END
     })
+    sg.add_conditional_edges("leave_type", route_leave, {
+        "awaiting_dates":  "leave_Eligibility",
+        "cancelled":        END
+    })
+    sg.add_edge("leave_Eligibility", END)
     return sg.compile(checkpointer=checkpointer)

@@ -17,7 +17,9 @@ class Init:
             max_output_tokens=4096,
             credentials=credentials,
             max_retries=2,
-            location=self.config.GCP_LOCATION
+            location=self.config.GCP_LOCATION,
+            thinking_budget=0,
+            streaming=True,
         )
 
         # self.intent_llm = ChatNVIDIA(model="qwen/qwen3.5-122b-a10b",temperature=0.2,nvidia_api_key="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")

@@ -57,9 +57,9 @@ app.include_router(ui_router)
 class ChatRequest(BaseModel):
     message:   str
     thread_id: Optional[str] = None
-    emp_code:  int   = 1203
+    emp_code:  int   = 123
     firm_id:   int   = 3
-    emp_name:  str   = "Ram"
+    emp_name:  str   = "Anika"
     role_id:   int   = 5
     firm_name: str   = "Macom"
 
@@ -160,6 +160,8 @@ async def resume(req: ResumeRequest):
     except ValueError as e:
         return ChatResponse(thread_id=req.thread_id, intent="leave", response=str(e), status="completed")
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
     return handle_result(result, req.thread_id)
@@ -210,13 +212,20 @@ async def chat_stream(req: ChatRequest):
                 elif kind == "on_tool_end":
                     yield f"data: {json.dumps({'type': 'tool_end', 'tool': event.get('name', '')})}\n\n"
 
-                # ── Guardrail / interrupt ──
+                # ── Interrupt (emitted as on_chain_stream with __interrupt__) ──
+                elif kind == "on_chain_stream" and node == "":
+                    chunk = event["data"].get("chunk", {})
+                    if "__interrupt__" in chunk:
+                        interrupt_data = chunk["__interrupt__"][0].value
+                        msg = interrupt_data.get("message", "") if isinstance(interrupt_data, dict) else str(interrupt_data)
+                        yield f"data: {json.dumps({'type': 'interrupt', 'content': msg, 'thread_id': thread_id})}\n\n"
+                        return
+
+                # ── Guardrail ──
                 elif kind == "on_chain_end":
                     output = event["data"].get("output")
-
                     if not isinstance(output, dict):
                         continue
-
                     if node == "orchestrator" and output.get("responded"):
                         messages = output.get("messages", [])
                         if messages:
@@ -229,12 +238,6 @@ async def chat_stream(req: ChatRequest):
                                 )
                             if content:
                                 yield f"data: {json.dumps({'type': 'guardrail', 'content': content})}\n\n"
-
-                    elif output.get("__interrupt__"):
-                        interrupt_data = output["__interrupt__"][0].value
-                        msg = interrupt_data.get("message", "") if isinstance(interrupt_data, dict) else str(interrupt_data)
-                        yield f"data: {json.dumps({'type': 'interrupt', 'content': msg})}\n\n"
-                        return
 
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"

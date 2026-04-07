@@ -1,3 +1,4 @@
+import datetime
 import sys
 import os
 
@@ -17,14 +18,14 @@ from guardrails_check import get_rails
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.memory import MemorySaver
 from statenode import State
-from src.pipeline.tools import tools as local_tools
+# from src.pipeline.tools import tools as local_tools
 
 load_dotenv()
 
 guardrails = get_rails()
 
 def get_all_tools():
-    return get_mcp_tools() + local_tools
+    return get_mcp_tools()
 
 
 class DynamicToolNode:
@@ -39,11 +40,19 @@ async def Orchestrator(state: State) -> State:
     new_state = {}
 
     if state.get("messages") and isinstance(state["messages"][-1], HumanMessage):
+        # input_messages = [
+        #     {"role": "user", "content": state["messages"][-1].content}
+        # ]
+        history = state["messages"][-3:]
         input_messages = [
-            {"role": "user", "content": state["messages"][-1].content}
+            {
+                "role": "user" if isinstance(m, HumanMessage) else "assistant",
+                "content": m.content
+            }
+            for m in history
+            if isinstance(m, (HumanMessage, AIMessage)) and m.content
         ]
         print(f"Input to Guardrail: {input_messages}")
-
         res = await guardrails.generate_async(
             messages=input_messages,
             options=GenerationOptions(
@@ -125,20 +134,26 @@ async def assistant_node(state: State) -> dict:
     print(f"Available tools: {all_tools}")
     logger.info(all_tools)
     llm = pipeline.vertex_llm.bind_tools(all_tools)
-    
+    current_date = datetime.datetime.now().strftime("%Y-%m-%d")
     system_content = (
-        "You are an intelligent Assistant. Your primary goal is to answer user queries by orchestrating the provided tools in the correct sequence.\n\n"
-        
-        f"INTENT CONTEXT: {classification}\n\n"
-        
-        "STRICT EXECUTION PIPELINE:\n"
-        "1. IDENTIFY TEMPORAL QUERIES: If the user asks for 'upcoming', 'next', or 'current' events (like holidays), you MUST call 'Current_Date_Time_Tool' FIRST.\n"
-        "2. MANDATORY TOOL LINKING: Once you receive the current date, you ARE REQUIRED to immediately call the 'Policy_RAG_Implementation' tool. Use the retrieved date to search for events occurring AFTER that date.\n"
-        "3. NO EARLY TERMINATION: Do not tell the user you lack a calendar. The 'Policy_RAG_Implementation' tool contains the calendar/holiday data. Use it.\n"
-        "4. USER INPUT: Pass the user's query and the current date context as a simple string to the RAG tool.\n\n"
-        
-        "OUTPUT GUIDELINES:\n"
-        "Synthesize the results from the RAG tool to provide the final answer. If the RAG tool returns the holiday list, identify the one closest to the current date provided by the time tool."
+        "You are MACOM AI, a helpful assistant for MACOM employees.\n\n"
+
+        f"INTENT: {classification}\n"
+        f"TODAY: {current_date}\n\n"
+
+        "TOOLS:\n"
+        "- Policy/holiday/leave queries → call 'Policy_RAG_Implementation' with plain string.\n"
+        "- Include TODAY's date in query for temporal questions. Example: 'Upcoming holidays after 2026-04-07?'\n"
+        "- If answer already in history → answer directly, no tool call.\n"
+        "- Never pass dict/JSON to tools.\n\n"
+
+        "OUTPUT:\n"
+        "- 'next/upcoming' → single closest result only.\n"
+        "- 'list/all' → full list.\n"
+        "- Policy answers: use tool context only. If not found, say so.\n"
+        "- Emails/date queries: answer directly, no tool needed.\n"
+        "- Never add unprompted refusals.\n"
+        "- Dont provide the whole information at once first provide short and ask if require detail information"
     )
 
     history = state["messages"][-5:]
@@ -159,7 +174,7 @@ def create_intent_driven_agent(checkpointer=None) -> StateGraph:
 
     Graph structure:
         START -> orchestrator -> route_after_classification
-                    -> assistant -> tools_condition -> tools -> assistant -> ...
+        -> assistant -> tools_condition -> tools -> assistant -> ...
     """
     
     if checkpointer is None:
