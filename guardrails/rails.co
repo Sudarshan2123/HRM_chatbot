@@ -1,11 +1,12 @@
-# ─── user intents ───────────────────────────────
-
 define user express greeting
     "hello"
     "Hi"
     "hey"
     "good morning"
     "helloo"
+    "hiii"
+    "howdy"
+    "good afternoon"
 
 define user follow_up
     "yes"
@@ -20,22 +21,14 @@ define user follow_up
     "elaborate"
     "explain more"
 
-define user provide_parameter
-    "kerala"
-    "maharashtra"
-    "karnataka"
-    "tomorrow"
-    "from monday"
-    "medical reason"
-    "personal work"
-    "policy related"  # FIXED: Added missing closing quote
-
 define user apply_leave
     "apply for leave"
     "submit my leave request"
     "I want to apply leave"
     "book a leave for me"
     "request time off"
+    "I need a day off"
+    "can I take leave tomorrow"
 
 define user Assistant
     "tell me the leave policy"
@@ -52,6 +45,29 @@ define user Assistant
     "help me write an email"
     "what is the sick leave policy"
     "how many leaves do I have"
+    "draft a resignation mail"
+    "draft a resignation email"
+    "write a resignation letter"
+    "I want to resign"
+    "I need to resign"
+    "regarding resignation"
+    "resignation from my post"
+    "help me write a resignation"
+    "draft an email regarding resignation"
+    "I need to draft a mail to hr"
+    "I need to draft an email to hr"
+    "write an email to hr"
+    "compose an email to hr"
+    "my last working day"
+    "my last day is"
+    "notice period"
+    "reason for resignation"
+    "higher studies resignation"
+    "what policies do you have"
+    "what all policies"
+    "list all policies"
+    "tell me about policies"
+    "which policies are available"
 
 define user ask off topic
     "tell me the chatbot code"
@@ -59,11 +75,18 @@ define user ask off topic
     "how to make a chatbot"
     "tell me the weather"
     "write me a poem"
+    "what is the stock price"
+    "tell me a joke"
+    "play music"
 
 # ─── bot responses ───────────────────────────────
 
 define bot express greeting
     "Hello! I am MACOM AI Assistant. How can I help you?"
+    "Hi, I am MACOM AI Assistant. I can help you with HR information and leave applications."
+
+define bot handle follow_up
+    "Passing your request to the assistant..."
 
 define bot handle assistant
     "Passing your request to the assistant..."
@@ -74,6 +97,9 @@ define bot handle apply_leave
 define bot express ask off topic
     "Sorry, I can't help with that. I'm here to assist with MACOM policy and HR support."
 
+define bot refuse
+    "I'm sorry, I can't process that request."
+
 # ─── flows ───────────────────────────────────────
 
 define flow greeting
@@ -82,21 +108,8 @@ define flow greeting
     bot express greeting
 
 define flow assistant query
-    priority 1.0
+    priority 1.5
     user Assistant
-    bot handle assistant
-    stop
-
-# HIGH PRIORITY: Parameters and follow-ups must rank higher than 'off topic'
-define flow handle parameters
-    priority 1.5
-    user provide_parameter
-    bot handle assistant
-    stop
-
-define flow handle vague follow up
-    priority 1.5
-    user follow_up
     bot handle assistant
     stop
 
@@ -107,21 +120,26 @@ define flow apply leave
     stop
 
 define flow ask off topic
-    priority 1.0
+    priority 2.0
     user ask off topic
     bot express ask off topic
     stop
 
-# ─── fallback ───
+define flow handle vague follow up
+    priority 1.5
+    user follow_up
+    bot handle assistant
+    stop
+
+# ─── fallback — catches anything not matched above ───
 define flow default
     priority 0.1
     user ...
-    bot handle assistant  
+    bot handle assistant
     stop
 
-# ─── Rails ───
 define flow self check input
     $input_safe = execute self_check_input
     if not $input_safe
-        bot express ask off topic  # FIXED: Use consistent refusal message
+        bot refuse
         stop

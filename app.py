@@ -16,10 +16,7 @@ from src.server.mcp_loader import get_mcp_tools
 from src.logging import logger
 from guardrails_check import get_rails
 from langgraph.prebuilt import ToolNode, tools_condition
-from langgraph.checkpoint.memory import MemorySaver
 from statenode import State
-# from src.pipeline.tools import tools as local_tools
-
 load_dotenv()
 
 guardrails = get_rails()
@@ -153,7 +150,7 @@ async def assistant_node(state: State) -> dict:
         "- Policy answers: use tool context only. If not found, say so.\n"
         "- Emails/date queries: answer directly, no tool needed.\n"
         "- Never add unprompted refusals.\n"
-        "- Dont provide the whole information at once first provide short and ask if require detail information"
+        "- Dont provide the whole information at once first provide short and ask if require detail information it should be in yes or some options but itb should be contian more words of policy related nothing else"
     )
 
     history = state["messages"][-5:]
@@ -176,9 +173,6 @@ def create_intent_driven_agent(checkpointer=None) -> StateGraph:
         START -> orchestrator -> route_after_classification
         -> assistant -> tools_condition -> tools -> assistant -> ...
     """
-    
-    if checkpointer is None:
-        checkpointer = MemorySaver()
 
     _leave_subgraph_compiled = leave_subgraph(checkpointer=checkpointer)
 

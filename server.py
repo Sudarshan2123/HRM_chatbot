@@ -1,5 +1,7 @@
 import json
 import os
+import psycopg
+from src.server.checkpointer import close_checkpointer, init_checkpointer
 
 os.environ["FASTEMBED_CACHE_PATH"] = "C:/fastembed_models"
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
@@ -34,10 +36,11 @@ _graph = None
 async def lifespan(app: FastAPI):
     global _graph
     await init_mcp_session()
-    checkpointer = MemorySaver()
+    checkpointer = await init_checkpointer()
     _graph = create_intent_driven_agent(checkpointer=checkpointer)
     yield
     await close_mcp_session()
+    await close_checkpointer()
 
 
 # ── App created first ──
@@ -57,7 +60,7 @@ app.include_router(ui_router)
 class ChatRequest(BaseModel):
     message:   str
     thread_id: Optional[str] = None
-    emp_code:  int   = 123
+    emp_code:  int   = 1203
     firm_id:   int   = 3
     emp_name:  str   = "Anika"
     role_id:   int   = 5
@@ -250,6 +253,80 @@ async def chat_stream(req: ChatRequest):
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
     )
 
+@app.get("/db/conversation/{thread_id}")
+async def get_conversation_from_db(thread_id: str):
+    """Read conversation directly from postgres via checkpointer."""
+    config = {"configurable": {"thread_id": thread_id}}
+
+    try:
+        # This reads from postgres automatically — no raw SQL needed
+        state = await _graph.aget_state(config)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Thread not found: {e}")
+
+    if not state or not state.values:
+        raise HTTPException(status_code=404, detail="No data for this thread")
+
+    messages = state.values.get("messages", [])
+
+    conversation = []
+    for msg in messages:
+        if isinstance(msg, HumanMessage):
+            role = "user"
+        elif isinstance(msg, AIMessage):
+            role = "assistant"
+        else:
+            role = msg.type  # tool, system etc
+
+        content = msg.content
+        if isinstance(content, list):
+            # Vertex AI returns list of dicts
+            content = " ".join(
+                block.get("text", "")
+                for block in content
+                if isinstance(block, dict)
+            )
+
+        if content and role in ("user", "assistant"):  # skip tool/system messages
+            conversation.append({
+                "role":    role,
+                "content": content
+            })
+
+    return {
+        "thread_id":     thread_id,
+        "intent":        state.values.get("intent", "unknown"),
+        "message_count": len(conversation),
+        "conversation":  conversation
+    }
+
+@app.get("/db/conversations")
+async def list_all_conversations():
+    """List all thread IDs from postgres."""
+    async with await psycopg.AsyncConnection.connect(os.getenv("DB_URI")) as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("""
+                SELECT 
+                    thread_id,
+                    COUNT(*)           AS total_checkpoints,
+                    MAX(checkpoint_id) AS latest_checkpoint
+                FROM checkpoints
+                GROUP BY thread_id
+                ORDER BY latest_checkpoint DESC
+            """)
+            rows = await cur.fetchall()
+
+    return {
+        "total_conversations": len(rows),
+        "conversations": [
+            {
+                "thread_id":         r[0],
+                "total_checkpoints": r[1],
+                "latest_checkpoint": r[2],
+            }
+            for r in rows
+        ]
+    }
 # ---------- Run ----------
 
 if __name__ == "__main__":
