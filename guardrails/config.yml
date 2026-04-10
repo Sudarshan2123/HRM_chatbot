@@ -20,9 +20,11 @@ rails:
       - apply leave
       - off topic       # passes through to LangGraph, no LLM
     user_messages:
-      embeddings_only: true                        # no LLM for intent classification
-      embeddings_only_similarity_threshold: 0.4
+      embeddings_only: True                        # no LLM for intent classification
+      embeddings_only_similarity_threshold: 0.6
       embeddings_only_fallback_intent: "ask off topic"
+    # single_call:
+    #   enabled: True
 
 prompts:
   - task: self_check_input

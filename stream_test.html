@@ -5,223 +5,492 @@
     <title>HRMS AI Assistant</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: monospace; background: #1e1e1e; color: #d4d4d4; display: flex; height: 100vh; overflow: hidden; }
 
-        /* ── Sidebar ── */
+        body {
+            font-family: 'Segoe UI', monospace;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* ─── Sidebar ─────────────────────────────────── */
         #sidebar {
-            width: 260px; min-width: 260px;
+            width: 260px;
+            min-width: 260px;
             background: #252526;
-            border-right: 1px solid #444;
-            display: flex; flex-direction: column;
+            border-right: 1px solid #3a3a3a;
+            display: flex;
+            flex-direction: column;
         }
-        #sidebar h3 { padding: 12px; font-size: 13px; color: #9cdcfe; border-bottom: 1px solid #444; }
-        #sidebar button.new-chat {
-            margin: 10px; padding: 8px;
-            background: #0e639c; color: white;
-            border: none; border-radius: 4px; cursor: pointer; font-size: 12px;
+
+        #sidebar h3 {
+            padding: 14px 12px;
+            font-size: 13px;
+            color: #9cdcfe;
+            border-bottom: 1px solid #3a3a3a;
+            letter-spacing: 0.5px;
         }
-        #sidebar button.new-chat:hover { background: #1177bb; }
-        #convList { flex: 1; overflow-y: auto; padding: 4px 0; }
+
+        #newChatBtn {
+            margin: 10px;
+            padding: 9px;
+            background: #0e639c;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+        }
+        #newChatBtn:hover { background: #1177bb; }
+
+        #convList { flex: 1; overflow-y: auto; }
+
         .conv-item {
-            padding: 8px 12px; cursor: pointer; font-size: 11px;
-            border-bottom: 1px solid #333; color: #ccc;
-            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            padding: 9px 12px;
+            cursor: pointer;
+            font-size: 11px;
+            border-bottom: 1px solid #2e2e2e;
+            color: #bbb;
         }
         .conv-item:hover { background: #2a2d2e; }
         .conv-item.active { background: #094771; color: white; }
-        .conv-item .conv-id { color: #888; font-size: 10px; }
+        .conv-item .conv-time { color: #666; font-size: 10px; margin-top: 2px; }
 
-        /* ── Main ── */
-        #main { flex: 1; display: flex; flex-direction: column; padding: 16px; overflow: hidden; }
-        #main h2 { font-size: 15px; margin-bottom: 10px; color: #9cdcfe; }
+        /* ─── Main ────────────────────────────────────── */
+        #main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 16px;
+            overflow: hidden;
+            gap: 10px;
+        }
+
+        #header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        #header h2 { font-size: 15px; color: #9cdcfe; }
+
+        #threadLabel {
+            font-size: 10px;
+            color: #555;
+            max-width: 300px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* ─── Chat output ─────────────────────────────── */
         #output {
-            flex: 1; overflow-y: auto;
-            white-space: pre-wrap;
-            border: 1px solid #444;
-            padding: 15px;
+            flex: 1;
+            overflow-y: auto;
+            padding: 14px;
             background: #252526;
-            border-radius: 4px;
-            margin-bottom: 10px;
+            border: 1px solid #3a3a3a;
+            border-radius: 6px;
+            line-height: 1.6;
+            font-size: 13px;
         }
-        .msg-user    { color: #569cd6; }
-        .msg-assistant { color: #9cdcfe; }
-        .token       { color: #9cdcfe; }
-        .tool        { color: #dcdcaa; }
-        .done        { color: #4ec9b0; }
-        .guard       { color: #ce9178; }
-        .error       { color: #f44747; }
-        .interrupt   { color: #ff9900; }
 
-        #inputRow { display: flex; gap: 8px; }
-        #msg { flex: 1; padding: 8px; background: #3c3c3c; border: 1px solid #555; color: white; border-radius: 4px; }
-        button { padding: 8px 14px; background: #0e639c; color: white; border: none; border-radius: 4px; cursor: pointer; }
-        button:hover { background: #1177bb; }
+        .msg-user      { color: #569cd6; }
+        .msg-assistant { color: #c8e1ff; }
+        .token         { color: #c8e1ff; }
+        .tool-msg      { color: #dcdcaa; font-size: 11px; }
+        .guard-msg     { color: #ce9178; }
+        .error-msg     { color: #f44747; }
+        .interrupt-msg { color: #ff9900; font-weight: 600; }
+        .divider       { color: #444; margin: 4px 0; }
 
-        #interruptPanel {
-            display: none; margin-bottom: 10px; padding: 12px;
-            background: #2d2d00; border: 1px solid #ff9900; border-radius: 4px;
+        /* ─── Input area ──────────────────────────────── */
+        #inputArea {
+            display: flex;
+            flex-direction: column;
+            gap: 0;
         }
-        #interruptPanel p { margin-bottom: 8px; color: #ff9900; font-size: 12px; }
-        #interruptInput { flex: 1; padding: 8px; background: #3c3c3c; border: 1px solid #ff9900; color: white; border-radius: 4px; }
-        #interruptRow { display: flex; gap: 8px; }
-        #interruptSendBtn { background: #cc7700; }
-        #interruptSendBtn:hover { background: #ff9900; }
+
+        /* Normal input */
+        #normalRow {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        #msg {
+            flex: 1;
+            padding: 10px 12px;
+            background: #2d2d2d;
+            border: 1px solid #4a4a4a;
+            border-radius: 6px;
+            color: #e0e0e0;
+            font-size: 13px;
+            font-family: inherit;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        #msg:focus { border-color: #0e639c; }
+        #msg:disabled { opacity: 0.35; cursor: not-allowed; }
+
+        #sendBtn {
+            padding: 10px 18px;
+            background: #0e639c;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        #sendBtn:hover:not(:disabled) { background: #1177bb; }
+        #sendBtn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+        #refreshBtn {
+            padding: 10px 12px;
+            background: #333;
+            color: #aaa;
+            border: 1px solid #4a4a4a;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        #refreshBtn:hover { background: #3c3c3c; color: white; }
+
+        /* Interrupt input */
+        #interruptRow {
+            display: none;              /* hidden by default */
+            flex-direction: column;
+            gap: 8px;
+            padding: 12px 14px;
+            background: #1e1600;
+            border: 1px solid #cc7700;
+            border-radius: 6px;
+        }
+
+        #interruptLabel {
+            color: #ff9900;
+            font-size: 12px;
+            font-weight: 700;
+            line-height: 1.4;
+        }
+
+        #interruptInnerRow {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        #interruptInput {
+            flex: 1;
+            padding: 10px 12px;
+            background: #2d2d2d;
+            border: 1px solid #cc7700;
+            border-radius: 6px;
+            color: #e0e0e0;
+            font-size: 13px;
+            font-family: inherit;
+            outline: none;
+        }
+        #interruptInput:focus { border-color: #ff9900; }
+        #interruptInput:disabled { opacity: 0.35; cursor: not-allowed; }
+
+        #interruptSendBtn {
+            padding: 10px 16px;
+            background: #cc7700;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        #interruptSendBtn:hover:not(:disabled) { background: #ff9900; }
+        #interruptSendBtn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 5px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
     </style>
 </head>
 <body>
 
 <!-- Sidebar -->
 <div id="sidebar">
-    <h3>💬 Conversations</h3>
-    <button class="new-chat" onclick="newChat()">+ New Chat</button>
-    <div id="convList"><div style="padding:12px;color:#666;font-size:11px;">Loading...</div></div>
+    <h3>Conversations</h3>
+    <button id="newChatBtn" onclick="newChat()">＋ New Chat</button>
+    <div id="convList">
+        <div style="padding:14px 12px;color:#555;font-size:11px;">Loading...</div>
+    </div>
 </div>
 
 <!-- Main -->
 <div id="main">
-    <h2>HRMS AI Assistant &nbsp;<span id="threadLabel" style="font-size:11px;color:#666;"></span></h2>
-    <div id="output">Start a conversation...</div>
 
-    <div id="interruptPanel">
-        <p id="interruptMsg">⚠ Awaiting your input:</p>
-        <div id="interruptRow">
-            <input id="interruptInput" type="text" placeholder="Type your response (e.g. yes / no)" />
-            <button id="interruptSendBtn">Reply</button>
-        </div>
+    <div id="header">
+        <h2>HRMS AI Assistant</h2>
+        <span id="threadLabel"></span>
     </div>
 
-    <div id="inputRow">
-        <input id="msg" type="text" placeholder="Type your message..." />
-        <button id="sendBtn">Send</button>
-        <button onclick="loadConversations()" style="background:#3c3c3c;">↻</button>
+    <div id="output">
+        <span style="color:#555">Start a conversation or select one from the sidebar...</span>
+    </div>
+
+    <!-- Input area — only ONE of these two rows is visible at any time -->
+    <div id="inputArea">
+
+        <!-- Row 1: Normal chat input (default) -->
+        <div id="normalRow">
+            <input id="msg" type="text" placeholder="Type your message..." autocomplete="off" />
+            <button id="sendBtn">Send ➤</button>
+            <button id="refreshBtn" onclick="loadConversations()" title="Refresh conversations">↻</button>
+        </div>
+
+        <!-- Row 2: Interrupt reply input (shown only during leave flow interrupts) -->
+        <div id="interruptRow">
+            <span id="interruptLabel">⚠ Awaiting your response:</span>
+            <div id="interruptInnerRow">
+                <input id="interruptInput" type="text" placeholder="Type your reply..." autocomplete="off" />
+                <button id="interruptSendBtn">Reply ➤</button>
+            </div>
+        </div>
+
     </div>
 </div>
 
 <script>
+    // ─── Config ───────────────────────────────────────────
+    var EMP_CODE  = 100606;
+    var FIRM_ID   = 3;
+    var EMP_NAME  = "Anika";
+    var ROLE_ID   = 5;
+    var FIRM_NAME = "Macom";
+
+    // ─── State ───────────────────────────────────────────
     var threadId = "thread-" + Math.random().toString(36).slice(2);
-    var output = document.getElementById("output");
-    var interruptPanel = document.getElementById("interruptPanel");
-    var interruptInput = document.getElementById("interruptInput");
 
-    document.getElementById("sendBtn").addEventListener("click", sendMessage);
-    document.getElementById("msg").addEventListener("keydown", function(e) { if (e.key === "Enter") sendMessage(); });
-    document.getElementById("interruptSendBtn").addEventListener("click", sendResume);
-    interruptInput.addEventListener("keydown", function(e) { if (e.key === "Enter") sendResume(); });
+    // ─── DOM refs ─────────────────────────────────────────
+    var output           = document.getElementById("output");
+    var normalRow        = document.getElementById("normalRow");
+    var interruptRow     = document.getElementById("interruptRow");
+    var msgInput         = document.getElementById("msg");
+    var sendBtn          = document.getElementById("sendBtn");
+    var interruptInput   = document.getElementById("interruptInput");
+    var interruptSendBtn = document.getElementById("interruptSendBtn");
+    var interruptLabel   = document.getElementById("interruptLabel");
+    var threadLabel      = document.getElementById("threadLabel");
 
-    // ── Load conversation list from DB ──
+    // ─── Event listeners ──────────────────────────────────
+    sendBtn.addEventListener("click", sendMessage);
+    msgInput.addEventListener("keydown", function(e) {
+        if (e.key === "Enter" && !sendBtn.disabled) sendMessage();
+    });
+    interruptSendBtn.addEventListener("click", sendResume);
+    interruptInput.addEventListener("keydown", function(e) {
+        if (e.key === "Enter" && !interruptSendBtn.disabled) sendResume();
+    });
+
+    // ─── Input mode switchers ─────────────────────────────
+
+    function showNormalInput() {
+        // Show normal row, hide interrupt row
+        normalRow.style.display     = "flex";
+        interruptRow.style.display  = "none";
+        // Re-enable everything
+        msgInput.disabled           = false;
+        sendBtn.disabled            = false;
+        interruptInput.disabled     = false;
+        interruptSendBtn.disabled   = false;
+        interruptInput.value        = "";
+        msgInput.focus();
+    }
+
+    function showInterruptInput(msg) {
+        // Hide normal row, show interrupt row
+        normalRow.style.display     = "none";
+        interruptRow.style.display  = "flex";
+        // Always re-enable interrupt inputs
+        interruptInput.disabled     = false;
+        interruptSendBtn.disabled   = false;
+        interruptInput.value        = "";
+        interruptLabel.textContent  = " " + msg;
+        interruptInput.focus();
+    }
+
+    function disableNormalInput() {
+        msgInput.disabled = true;
+        sendBtn.disabled  = true;
+    }
+
+    function disableInterruptInput() {
+        interruptInput.disabled   = true;
+        interruptSendBtn.disabled = true;
+    }
+
+    // ─── Output helpers ───────────────────────────────────
+
+    function appendUser(text) {
+        output.innerHTML += "<div style='margin:6px 0'><span class='msg-user'>You:</span> " + escHtml(text) + "</div>";
+        scrollBottom();
+    }
+
+    function appendAssistant(text) {
+        output.innerHTML += "<div style='margin:6px 0'><span class='msg-assistant'>Assistant:</span> " + escHtml(text) + "</div>";
+        scrollBottom();
+    }
+
+    function appendInterruptMsg(text) {
+        output.innerHTML += "<div style='margin:6px 0'><span class='interrupt-msg'>" + escHtml(text) + "</span></div>";
+        scrollBottom();
+    }
+
+    function scrollBottom() {
+        output.scrollTop = output.scrollHeight;
+    }
+
+    // ─── Load sidebar conversations ───────────────────────
+
     async function loadConversations() {
         try {
-            var res = await fetch("/db/conversations");
+            var res  = await fetch("/db/conversations/user", {
+                method:  "POST",
+                headers: { "Content-Type": "application/json" },
+                body:    JSON.stringify({ emp_code: EMP_CODE })
+            });
             var data = await res.json();
             var list = document.getElementById("convList");
-            if (!data.conversations || data.conversations.length === 0) {
-                list.innerHTML = "<div style='padding:12px;color:#666;font-size:11px;'>No conversations yet</div>";
+            var conversations = data.conversations || [];
+
+            if (conversations.length === 0) {
+                list.innerHTML = "<div style='padding:14px 12px;color:#555;font-size:11px;'>No conversations yet</div>";
                 return;
             }
-            list.innerHTML = data.conversations.map(function(c) {
-                return "<div class='conv-item" + (c.thread_id === threadId ? " active" : "") + "' onclick='loadThread(\"" + c.thread_id + "\")' title='" + c.thread_id + "'>" +
-                    "<div>" + c.thread_id.slice(0, 28) + "...</div>" +
-                    "<div class='conv-id'>checkpoints: " + c.total_checkpoints + "</div>" +
+
+            list.innerHTML = conversations.map(function(c) {
+                var isActive = c.thread_id === threadId ? " active" : "";
+                var time     = new Date(c.last_active).toLocaleString();
+                return "<div class='conv-item" + isActive + "' " +
+                    "onclick='loadThread(\"" + c.thread_id + "\")' " +
+                    "title='" + c.thread_id + "'>" +
+                    "<div>" + escHtml(c.thread_id.slice(0, 26)) + "…</div>" +
+                    "<div class='conv-time'>" + time + "</div>" +
                 "</div>";
             }).join("");
+
         } catch(e) {
-            document.getElementById("convList").innerHTML = "<div style='padding:12px;color:#f44747;font-size:11px;'>Failed to load</div>";
+            document.getElementById("convList").innerHTML =
+                "<div style='padding:12px;color:#f44747;font-size:11px;'>Load failed: " + escHtml(e.message) + "</div>";
         }
     }
 
-    // ── Load a specific thread's history ──
+    // ─── Load a thread's message history ──────────────────
+
     async function loadThread(tid) {
         threadId = tid;
-        document.getElementById("threadLabel").textContent = "Thread: " + tid;
-        hideInterrupt();
+        threadLabel.textContent = tid;
+        showNormalInput();   // always reset input when loading a thread
 
-        // highlight active
         document.querySelectorAll(".conv-item").forEach(function(el) {
             el.classList.toggle("active", el.title === tid);
         });
 
+        output.innerHTML = "<span style='color:#555'>Loading thread...</span>";
+
         try {
-            var res = await fetch("/db/conversation/" + tid);
-            var data = await res.json();
-            output.innerHTML = "";
-            data.conversation.forEach(function(m) {
-                if (m.role === "user") {
-                    output.innerHTML += "<br><span class='msg-user'>You: " + escHtml(m.content) + "</span><br>";
-                } else if (m.role === "assistant") {
-                    output.innerHTML += "<span class='msg-assistant'>Assistant: " + escHtml(m.content) + "</span><br>";
-                }
-            });
-            output.scrollTop = output.scrollHeight;
-        } catch(e) {
-            output.innerHTML = "<span class='error'>Failed to load thread: " + e.message + "</span>";
-        }
-    }
-
-    function newChat() {
-        threadId = "thread-" + Math.random().toString(36).slice(2);
-        document.getElementById("threadLabel").textContent = "Thread: " + threadId;
-        output.innerHTML = "Start a conversation...";
-        hideInterrupt();
-        document.querySelectorAll(".conv-item").forEach(function(el) { el.classList.remove("active"); });
-    }
-
-    function showInterrupt(msg) {
-        document.getElementById("interruptMsg").textContent = "⚠ " + msg;
-        interruptPanel.style.display = "block";
-        interruptInput.value = "";
-        interruptInput.focus();
-    }
-
-    function hideInterrupt() { interruptPanel.style.display = "none"; }
-
-    async function sendResume() {
-        var decision = interruptInput.value.trim();
-        if (!decision) return;
-        hideInterrupt();
-        output.innerHTML += "<br><span class='msg-user'>You: " + escHtml(decision) + "</span><br>Assistant: ";
-        try {
-            var res = await fetch("/chat/resume", {
-                method: "POST",
+            var res  = await fetch("/db/conversation", {
+                method:  "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ thread_id: threadId, decision: decision })
+                body:    JSON.stringify({ emp_code: EMP_CODE, thread_id: tid })
             });
             var data = await res.json();
-            if (data.status === "waiting_for_input") {
-                output.innerHTML += "<span class='interrupt'>" + escHtml(data.response) + "</span>";
-                showInterrupt(data.response);
-            } else {
-                output.innerHTML += "<span class='msg-assistant'>" + escHtml(data.response) + "</span>";
-            }
-            output.innerHTML += "<br>";
-            output.scrollTop = output.scrollHeight;
-            loadConversations();
-        } catch(err) {
-            output.innerHTML += "<br><span class='error'>Resume failed: " + err.message + "</span><br>";
-        }
-    }
-
-    async function sendMessage() {
-        var msg = document.getElementById("msg").value.trim();
-        if (!msg) return;
-        document.getElementById("msg").value = "";
-        output.innerHTML += "<br><span class='msg-user'>You: " + escHtml(msg) + "</span><br>Assistant: ";
-
-        try {
-            var res = await fetch("/chat/stream", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ message: msg, thread_id: threadId })
-            });
 
             if (!res.ok) {
-                var errText = await res.text();
-                output.innerHTML += "<span class='error'>HTTP " + res.status + ": " + errText + "</span><br>";
+                output.innerHTML = "<span class='error-msg'>Error: " + escHtml(data.detail || JSON.stringify(data)) + "</span>";
                 return;
             }
 
-            var reader = res.body.getReader();
-            var decoder = new TextDecoder();
-            var buffer = "";
+            var msgs = data.conversation || [];
+            if (msgs.length === 0) {
+                output.innerHTML = "<span style='color:#555'>No messages in this thread yet.</span>";
+                return;
+            }
+
+            output.innerHTML = "";
+            msgs.forEach(function(m) {
+                if (m.role === "user") {
+                    output.innerHTML += "<div style='margin:6px 0'><span class='msg-user'>You:</span> " + escHtml(m.content) + "</div>";
+                } else {
+                    output.innerHTML += "<div style='margin:6px 0'><span class='msg-assistant'>Assistant:</span> " + escHtml(m.content) + "</div>";
+                }
+            });
+            scrollBottom();
+
+        } catch(e) {
+            output.innerHTML = "<span class='error-msg'>Failed to load: " + escHtml(e.message) + "</span>";
+        }
+    }
+
+    // ─── New chat ─────────────────────────────────────────
+
+    function newChat() {
+        threadId = "thread-" + Math.random().toString(36).slice(2);
+        threadLabel.textContent = threadId;
+        output.innerHTML = "<span style='color:#555'>Start a conversation...</span>";
+        showNormalInput();
+        document.querySelectorAll(".conv-item").forEach(function(el) {
+            el.classList.remove("active");
+        });
+    }
+
+    // ─── Send normal message ──────────────────────────────
+
+    async function sendMessage() {
+        var msg = msgInput.value.trim();
+        if (!msg) return;
+
+        msgInput.value = "";
+        disableNormalInput();
+        appendUser(msg);
+
+        // Placeholder for streaming assistant response
+        var streamDiv = document.createElement("div");
+        streamDiv.style.margin = "6px 0";
+        streamDiv.innerHTML    = "<span class='msg-assistant'>Assistant:</span> ";
+        output.appendChild(streamDiv);
+        scrollBottom();
+
+        try {
+            var res = await fetch("/chat/stream", {
+                method:  "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    message:   msg,
+                    thread_id: threadId,
+                    emp_code:  EMP_CODE,
+                    firm_id:   FIRM_ID,
+                    emp_name:  EMP_NAME,
+                    role_id:   ROLE_ID,
+                    firm_name: FIRM_NAME
+                })
+            });
+
+            if (!res.ok) {
+                streamDiv.innerHTML += "<span class='error-msg'>HTTP " + res.status + "</span>";
+                showNormalInput();
+                return;
+            }
+
+            var reader      = res.body.getReader();
+            var decoder     = new TextDecoder();
+            var buffer      = "";
+            var interrupted = false;
 
             while (true) {
                 var r = await reader.read();
@@ -233,42 +502,107 @@
                 for (var i = 0; i < parts.length; i++) {
                     var line = parts[i].trim();
                     if (!line.startsWith("data: ")) continue;
+
                     try {
                         var evt = JSON.parse(line.slice(6));
+
                         if (evt.type === "token") {
-                            output.innerHTML += "<span class='token'>" + escHtml(evt.content) + "</span>";
+                            streamDiv.innerHTML += "<span class='token'>" + escHtml(evt.content) + "</span>";
+
                         } else if (evt.type === "tool_start") {
-                            output.innerHTML += "<br><span class='tool'>[tool] " + evt.tool + "...</span><br>";
+                            streamDiv.innerHTML += "<br><span class='tool-msg'>⚙ Calling " + escHtml(evt.tool) + "…</span><br>";
+
                         } else if (evt.type === "tool_end") {
-                            output.innerHTML += "<span class='tool'>[done] " + evt.tool + "</span><br>";
+                            streamDiv.innerHTML += "<span class='tool-msg'>✓ Done</span><br>";
+
                         } else if (evt.type === "guardrail") {
-                            output.innerHTML += "<span class='guard'>" + escHtml(evt.content) + "</span>";
+                            streamDiv.innerHTML += "<span class='guard-msg'>" + escHtml(evt.content) + "</span>";
+
                         } else if (evt.type === "interrupt") {
+                            // ── Leave flow interrupt ──
+                            // Remove empty stream placeholder
+                            if (streamDiv.parentNode) streamDiv.parentNode.removeChild(streamDiv);
                             if (evt.thread_id) threadId = evt.thread_id;
-                            output.innerHTML += "<br><span class='interrupt'>" + escHtml(evt.content) + "</span><br>";
-                            showInterrupt(evt.content);
+                            appendInterruptMsg(evt.content);
+                            interrupted = true;
+                            showInterruptInput(evt.content);   // ← switches to interrupt input
+
                         } else if (evt.type === "error") {
-                            output.innerHTML += "<br><span class='error'>[error] " + escHtml(evt.content) + "</span><br>";
+                            streamDiv.innerHTML += "<span class='error-msg'>[error] " + escHtml(evt.content) + "</span>";
+
                         } else if (evt.type === "done") {
-                            output.innerHTML += "<br>";
                             loadConversations();
+                            if (!interrupted) {
+                                showNormalInput();   // ← re-enable normal input only if no interrupt
+                            }
                         }
-                        output.scrollTop = output.scrollHeight;
-                    } catch(parseErr) {}
+
+                        scrollBottom();
+                    } catch(pe) { /* skip malformed event */ }
                 }
             }
+
         } catch(err) {
-            output.innerHTML += "<br><span class='error'>Fetch failed: " + err.message + "</span><br>";
+            output.innerHTML += "<div><span class='error-msg'>Fetch failed: " + escHtml(err.message) + "</span></div>";
+            showNormalInput();
         }
     }
 
-    function escHtml(str) {
-        return String(str).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    // ─── Send interrupt reply ─────────────────────────────
+
+    async function sendResume() {
+        var decision = interruptInput.value.trim();
+        if (!decision) return;
+
+        appendUser(decision);
+        disableInterruptInput();   // ← disable while waiting for response
+
+        try {
+            var res  = await fetch("/chat/resume", {
+                method:  "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    thread_id: threadId,
+                    decision:  decision,
+                    emp_code:  EMP_CODE
+                })
+            });
+            var data = await res.json();
+
+            if (data.status === "waiting_for_input") {
+                // ── Another interrupt step ──
+                appendInterruptMsg(data.response);
+                showInterruptInput(data.response);   // ← re-enables interrupt input
+
+            } else {
+                // ── Leave flow finished ──
+                appendAssistant(data.response);
+                showNormalInput();                   // ← back to normal input
+            }
+
+            loadConversations();
+
+        } catch(err) {
+            output.innerHTML += "<div><span class='error-msg'>Resume failed: " + escHtml(err.message) + "</span></div>";
+            showNormalInput();   // always recover
+        }
     }
 
-    // Load on startup
+    // ─── Utility ──────────────────────────────────────────
+
+    function escHtml(str) {
+        return String(str)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;");
+    }
+
+    // ─── Init ─────────────────────────────────────────────
+    threadLabel.textContent = threadId;
+    showNormalInput();       // set initial state explicitly
     loadConversations();
-    document.getElementById("threadLabel").textContent = "Thread: " + threadId;
+
 </script>
 </body>
 </html>
