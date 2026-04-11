@@ -1,23 +1,35 @@
+import os 
+import asyncio
+import logging
+from typing import List, Optional
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.sse import sse_client
-# ADD: Import for Streamable HTTP
 from mcp.client.streamable_http import streamable_http_client 
 from langchain_mcp_adapters.tools import load_mcp_tools
-import asyncio
-import logging
 
-# Updated Transport string
-TRANSPORT = "Streamable-http"
-MCP_SERVER_PATH = "E:\\Agentic_Chatbot\\Mcp"
-MCP_SSE_URL = "http://localhost:8000/sse"
-# Streamable HTTP usually hits the base URL or /message depending on your server config
-MCP_HTTP_URL = "http://10.192.5.51:6000/mcp" 
+# --- Configuration ---
+ZOHO_KEY = os.getenv("Zoho_MCP_KEY")
 
-_tools = None
-_session = None
-_cm_outer = None 
-_cm_inner = None 
+MCP_CONFIGS = [
+    {
+        "name": "zoho_mail_server",
+        "transport": "streamable-http",
+        # FIXED: Use f-string to properly inject the key into the URL
+        "url": f"https://mail-sending-replies-60069513271.zohomcp.in/mcp/{ZOHO_KEY}/message"
+    },
+    {
+        "name": "remote_internal_server",
+        "transport": "streamable-http",
+        "url": "http://10.192.5.51:6000/mcp"
+    }
+]
+
+# --- Global State Management ---
+_tools = []
+_sessions: List[ClientSession] = []
+_cm_outers = [] 
+_cm_inners = [] 
 _init_lock = None
 
 def _get_lock():
@@ -26,87 +38,98 @@ def _get_lock():
         _init_lock = asyncio.Lock()
     return _init_lock
 
-async def _is_session_alive() -> bool:
-    global _session
-    if _session is None:
-        return False
+async def init_single_server(config):
+    """
+    Logic for a single server handshake. 
+    Parallelizing this prevents one slow server from blocking others.
+    """
+    global _tools, _sessions, _cm_outers, _cm_inners
+    transport_type = config.get("transport", "").lower()
+    
     try:
-        # Pings the server to see if the session is valid
-        await _session.list_tools()
-        return True
-    except Exception:
-        return False
+        logging.info(f"Connecting to {config['name']} via {transport_type}...")
+        
+        # 1. Setup Transport
+        if transport_type == "stdio":
+            server_params = StdioServerParameters(
+                command=config["command"],
+                args=config["args"],
+                cwd=config["cwd"]
+            )
+            cm_outer = stdio_client(server_params)
+            read, write = await cm_outer.__aenter__()
+
+        elif transport_type == "sse":
+            cm_outer = sse_client(config["url"])
+            read, write = await cm_outer.__aenter__()
+
+        elif transport_type == "streamable-http":
+            cm_outer = streamable_http_client(config["url"])
+            result = await cm_outer.__aenter__()
+            read, write = result[0], result[1]
+        else:
+            logging.warning(f"Unknown transport type for {config['name']}")
+            return
+
+        # 2. Setup Session
+        cm_inner = ClientSession(read, write)
+        session = await cm_inner.__aenter__()
+        
+        # This is usually the bottleneck - initialize() waits for a server ping
+        await session.initialize()
+
+        # 3. Load tools
+        server_tools = await load_mcp_tools(session)
+        
+        # 4. Thread-safe update of globals
+        _tools.extend(server_tools)
+        _cm_outers.append(cm_outer)
+        _cm_inners.append(cm_inner)
+        _sessions.append(session)
+
+        logging.info(f"Successfully loaded {len(server_tools)} tools from {config['name']}.")
+
+    except Exception as e:
+        logging.error(f"Failed to initialize MCP server {config['name']}: {e}")
 
 async def init_mcp_session():
-    global _tools, _session, _cm_outer, _cm_inner
+    global _tools
 
-    if _session is not None and await _is_session_alive():
+    if _tools:
         return _tools
 
     async with _get_lock():
-        if _session is not None and await _is_session_alive():
+        if _tools:
             return _tools
 
         await close_mcp_session()
 
-        try:
-            if TRANSPORT.lower() == "stdio":
-                server_params = StdioServerParameters(
-                    command="python",
-                    args=["mcp_server.py"],
-                    cwd=MCP_SERVER_PATH
-                )
-                _cm_outer = stdio_client(server_params)
-                read, write = await _cm_outer.__aenter__()
+        # FIXED: Run all initializations in parallel using asyncio.gather
+        tasks = [init_single_server(config) for config in MCP_CONFIGS]
+        await asyncio.gather(*tasks)
 
-            elif TRANSPORT.lower() == "sse":
-                _cm_outer = sse_client(MCP_SSE_URL)
-                read, write = await _cm_outer.__aenter__()
-
-            else:
-                # Streamable HTTP returns (read, write, get_session_id)
-                logging.info(f"Connecting via Streamable HTTP to {MCP_HTTP_URL}")
-                _cm_outer = streamable_http_client(MCP_HTTP_URL)
-                result = await _cm_outer.__aenter__()
-
-                # Safely unpack regardless of tuple length
-                read, write = result[0], result[1]
-                logging.info("Streamable HTTP context entered successfully.")
-
-            _cm_inner = ClientSession(read, write)
-            _session = await _cm_inner.__aenter__()
-            await _session.initialize()
-
-            _tools = await load_mcp_tools(_session)
-            logging.info(f"[{TRANSPORT}] MCP tools loaded: {[t.name for t in _tools]}")
-
-        except Exception as e:
-            logging.error(f"MCP server unavailable ({TRANSPORT}): {e}")
-            await close_mcp_session()
-            _tools = []
-
+        if not _tools:
+            logging.error("Final Result: No MCP tools were loaded from any configured server.")
+            
     return _tools
-
 
 def get_mcp_tools() -> list:
     return _tools or []
 
 async def close_mcp_session():
-    global _tools, _session, _cm_outer, _cm_inner
+    global _tools, _sessions, _cm_outers, _cm_inners
 
-    if _cm_inner is not None:
+    # Close sessions first
+    for cm in _cm_inners:
         try:
-            await _cm_inner.__aexit__(None, None, None)
+            await cm.__aexit__(None, None, None)
         except Exception: pass
-        _cm_inner = None
-
-    if _cm_outer is not None:
-        try:
-            await _cm_outer.__aexit__(None, None, None)
-        except Exception: pass
-        _cm_outer = None
-
-    _session = None
-    _tools = None
-    logging.info("MCP session closed.")
     
+    # Close transports
+    for cm in _cm_outers:
+        try:
+            await cm.__aexit__(None, None, None)
+        except Exception: pass
+
+    _tools, _sessions, _cm_outers, _cm_inners = [], [], [], []
+    logging.info("All MCP sessions and transports closed.")

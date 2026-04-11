@@ -37,12 +37,25 @@ _graph = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _graph
-    await init_mcp_session()
-    checkpointer = await init_checkpointer()
-    _graph = create_intent_driven_agent(checkpointer=checkpointer)
-    yield
-    await close_mcp_session()
-    await close_checkpointer()
+    try:
+        # Increase internal timeout awareness or just log the start
+        print("Starting Lifespan: Initializing MCP Sessions...")
+        
+        # This now handles multiple servers internally based on your new loader
+        await init_mcp_session() 
+        
+        print("Initializing Checkpointer...")
+        checkpointer = await init_checkpointer()
+        
+        print("Creating Agentic Graph...")
+        _graph = create_intent_driven_agent(checkpointer=checkpointer)
+        
+        yield
+    finally:
+        # Ensure cleanup happens even if startup fails halfway
+        print("Shutting down: Closing sessions...")
+        await close_mcp_session()
+        await close_checkpointer()
 
 
 
@@ -481,4 +494,11 @@ async def list_all_conversations():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(
+        "server:app", 
+        host="0.0.0.0", 
+        port=8000, 
+        reload=True,
+        lifespan="on",
+        timeout_keep_alive=60 # Adjust based on network latency
+    )

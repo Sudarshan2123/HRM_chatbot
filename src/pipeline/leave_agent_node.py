@@ -397,15 +397,20 @@ def submit_leave_application(state: LeaveState) -> dict:
             ]
         }
 
-        if random.random() < 0.20:
-                    feedback_url = "https://forms.google.com/your-form-link"
-                    output["feedback_url"] = feedback_url
-                    output["response"] += "\n\nWe value your feedback!"
-                    # Update the last message to include the feedback text
-                    output["messages"][-1] = AIMessage(content=output["response"])
-
-                # This return MUST be outside the IF block to handle the other 80% of cases
-        
+        if random.random() < 0.80:
+            feedback_url = "https://forms.google.com/your-form-link"
+            output["feedback_url"] = feedback_url
+            output["response"] += "\n\nWe value your feedback!"
+            # Update the last message to include the feedback text
+            output = {
+                    "leave_step": status,
+                    "response": res_text,
+                    "messages": [
+                        AIMessage(content=summary),
+                        HumanMessage(content=str(conf)),
+                        AIMessage(content=f"{res_text}\n\nWe value your feedback!\n{feedback_url}")
+                    ]
+                } 
         return output
         
     except Exception as e:

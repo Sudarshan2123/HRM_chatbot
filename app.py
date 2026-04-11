@@ -13,6 +13,7 @@ from nemoguardrails.rails.llm.options import GenerationOptions
 # from src.pipeline.leave_agent import run_leave_agent
 from src.ColdStart.singleton import get_pipeline
 from src.server.mcp_loader import get_mcp_tools
+from src.pipeline.tools import tools as localTool
 from src.logging import logger
 from guardrails_check import get_rails
 from langgraph.prebuilt import ToolNode, tools_condition
@@ -22,7 +23,7 @@ load_dotenv()
 guardrails = get_rails()
 
 def get_all_tools():
-    return get_mcp_tools()
+    return get_mcp_tools() + localTool
 
 
 class DynamicToolNode:
@@ -190,8 +191,6 @@ def route_after_classification(state: State) -> str:
 
     return "assistant"
 
-
-
 async def assistant_node(state: State) -> dict:
     """LLM node that binds tools and generates a response."""
     pipeline = get_pipeline()
@@ -205,17 +204,23 @@ async def assistant_node(state: State) -> dict:
     system_content = (
         "You are MACOM AI, a dedicated HR Assistant for MACOM employees.\n\n"
 
-        f"CURRENT DATE: {current_date}\n\n"
+        f"CURRENT_DATE: {current_date}\n\n"
+        
+        "--- GENERAL INSTRUCTIONS ---\n"
+        "1. Always try to get data first using the Policy_RAG_Implementation tool before you tell that data was not found\n"
 
         "--- TOOL EXECUTION RULES ---\n"
         "1. Policy/Holiday/Leave queries → call 'Policy_RAG_Implementation' with a plain string.\n"
-        "2. SYNTHESIZED SEARCH: If a user provides extra detail (e.g., 'Kerala', 'Confirmed') "
-        "to a previous question, combine it with the previous context before searching. "
-        "Example: Search 'Sick leave policy for confirmed employee in Kerala' not just 'Kerala'.\n"
-        "3. If the answer is already in conversation history → answer directly, no tool call.\n"
-        "4. Never pass dict/JSON to tools — plain string only.\n\n"
+        "2. Weather/Temperature queries → call 'get_weather' with the city name only (e.g., 'Mumbai').\n"
+        "3. News/Headlines queries → call 'get_top_news' with a category (e.g., 'business', 'sports', 'technology'). Defaults to 'general'.\n"
+        "4. SYNTHESIZED SEARCH: If a user provides extra detail to a previous question, combine it with context before searching.\n"
+        "5. If the answer is in conversation history → answer directly, no tool call.\n"
+        "6. Never pass dict/JSON to tools — plain string only.\n\n"
+        "7. If user asks about mail id of hr head,hr or any member try to get it from the Policy_RAG_Implementation Tool"
 
         "--- OUTPUT RULES ---\n"
+        "- For Weather: Provide a friendly, concise update (e.g., 'It's a sunny 37°C in Kochi today').\n"
+        "- For News: Present only the top 5 bullet points with sources. If a category is empty, inform the user you are showing general news instead.\n"
         "- 'Next/Upcoming' → single closest result only.\n"
         "- 'List/All' → full list.\n"
         "- If not found in RAG → say: 'I couldn't find specific policy details for [Topic] in our database.'\n"
