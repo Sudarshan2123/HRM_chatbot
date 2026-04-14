@@ -17,6 +17,7 @@ class Init:
             max_output_tokens=4096,
             credentials=credentials,
             max_retries=2,
+            vertexai=True,
             location=self.config.GCP_LOCATION,
             thinking_budget=0,
             streaming=True,
