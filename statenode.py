@@ -20,3 +20,4 @@ class State(TypedDict):
     to_date:         Optional[str]
     remarks:         Optional[str]
     response:        Optional[str]
+    tools:           Optional[str]

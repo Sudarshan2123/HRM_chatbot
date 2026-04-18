@@ -22,10 +22,11 @@ class Init:
             thinking_budget=0,
             streaming=True,
         )
-
-        # self.intent_llm = ChatNVIDIA(model="qwen/qwen3.5-122b-a10b",temperature=0.2,nvidia_api_key="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")
         self.intent_llm = ChatOllama(model="llama3.2", temperature=0.2)
-        # self.Analyzer = DataAnalyzer(config=self.config, vertex_llm=self.vertex_llm,engine=self.engine)
+        self.ACCESS_TOKEN_EXPIRE_MINUTES =self.config.ACCESS_TOKEN_EXPIRE_MINUTES
+        self.SECRET_KEY = self.config.SECRET_KEY
+        self.ALGORITHM =self.config.ALGORITHM
+
 
 
 # ✅ Initialize ONCE at module load time — this is the key

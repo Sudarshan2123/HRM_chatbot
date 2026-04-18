@@ -397,7 +397,7 @@ def submit_leave_application(state: LeaveState) -> dict:
             ]
         }
 
-        if random.random() < 0.80:
+        if random.random() < 0.20:
             feedback_url = "https://forms.google.com/your-form-link"
             output["feedback_url"] = feedback_url
             output["response"] += "\n\nWe value your feedback!"

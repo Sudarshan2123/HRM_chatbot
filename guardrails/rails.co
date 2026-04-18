@@ -75,6 +75,9 @@ define user Assistant
     "draft an email to hr"
     "write a leave email"          # ← drafting email ≠ applying leave
     "write a mail for sick leave"
+    "send a mail to  a email id"
+    "show all the recent mails"
+    "show me the content of this mail"
     "help me write an email"
     "draft a resignation mail"
     "draft a resignation email"

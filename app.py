@@ -13,6 +13,7 @@ from nemoguardrails.rails.llm.options import GenerationOptions
 # from src.pipeline.leave_agent import run_leave_agent
 from src.ColdStart.singleton import get_pipeline
 from src.server.mcp_loader import get_mcp_tools
+from src.server.zoho_session import get_zoho_tools_for_user
 from src.pipeline.tools import tools as localTool
 from src.logging import logger
 from guardrails_check import get_rails
@@ -22,15 +23,53 @@ load_dotenv()
 
 guardrails = get_rails()
 
-def get_all_tools():
-    return get_mcp_tools() + localTool
+async def get_all_tools_for_user(emp_code: int = None) -> list:
+    """
+    Build the full tool list for one user:
+      1. Shared MCP tools (internal server — same for everyone)
+      2. Local tools (RAG, weather, news — same for everyone)
+      3. Per-user Zoho tools (fetched via their saved hash — unique per user)
+
+    Zoho tools override any shared tool with the same name.
+    """
+    # ── Shared tools (same for all users) ─────────────────────────────
+    shared_tools = get_mcp_tools() + localTool
+
+    if not emp_code:
+        return shared_tools
+
+    # ── Per-user Zoho tools ────────────────────────────────────────────
+    try:
+        user_zoho_tools = await get_zoho_tools_for_user(emp_code)
+    except Exception as e:
+        logger.error(f"[emp:{emp_code}] Failed to load Zoho tools: {e}")
+        user_zoho_tools = []
+
+    if not user_zoho_tools:
+        return shared_tools
+
+    # Zoho tools override any shared tool with the same name
+    user_tool_names = {t.name for t in user_zoho_tools}
+    filtered_shared = [t for t in shared_tools if t.name not in user_tool_names]
+
+    all_tools = filtered_shared + user_zoho_tools
+    logger.info(
+        f"[emp:{emp_code}] Tools: {len(filtered_shared)} shared + "
+        f"{len(user_zoho_tools)} Zoho = {len(all_tools)} total"
+    )
+    return all_tools
 
 
 class DynamicToolNode:
-    """Wraps ToolNode but rebuilds with current tools on each call."""
+    """Wraps ToolNode but rebuilds with current tools on each call.
+    
+    Fetches user-specific Zoho tools based on emp_code from state.
+    """
 
     async def __call__(self, state):
-        node = ToolNode(get_all_tools())
+        emp_code = state.get("emp_code")
+        tools = await get_all_tools_for_user(emp_code)
+        node = ToolNode(tools)
         return await node.ainvoke(state)
 
 
@@ -191,14 +230,36 @@ def route_after_classification(state: State) -> str:
 
     return "assistant"
 
+def _smart_history(messages: list) -> list:
+    """
+    Return a window of messages that always includes:
+    - The last HumanMessage and everything after it (tool calls + tool results)
+    - Up to 4 previous messages for context
+    Never cuts off mid tool-call/result cycle.
+    """
+    # Find the index of the last HumanMessage
+    last_human_idx = None
+    for i in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[i], HumanMessage):
+            last_human_idx = i
+            break
+
+    if last_human_idx is None:
+        return messages[-6:]
+
+    # Take 4 messages before the last human turn for context, plus everything from it onward
+    start = max(0, last_human_idx - 4)
+    return messages[start:]
+
 async def assistant_node(state: State) -> dict:
     """LLM node that binds tools and generates a response."""
     pipeline = get_pipeline()
     classification = state.get("intent", "general")
+    emp_code = state.get("emp_code")
 
-    all_tools = get_all_tools()
-    print(f"Available tools: {all_tools}")
-    logger.info(all_tools)
+    all_tools = await get_all_tools_for_user(emp_code)
+    print(f"Available tools for emp_code {emp_code}: {[t.name for t in all_tools]}")
+    logger.info(f"Loaded {len(all_tools)} tools for emp_code {emp_code}")
     llm = pipeline.vertex_llm.bind_tools(all_tools)
     current_date = datetime.datetime.now().strftime("%Y-%m-%d")
     system_content = (
@@ -216,44 +277,91 @@ async def assistant_node(state: State) -> dict:
         "3. News/Headlines queries → call 'Get_Top_News' with a category (e.g., 'business', 'sports', 'technology'). Defaults to 'general'.\n"
         "4. SYNTHESIZED SEARCH: If a user provides extra detail to a previous question, combine it with context before searching.\n"
         "5. If the answer is in conversation history → answer directly, no tool call.\n"
-        "6. Never pass dict/JSON to tools — plain string only.\n"
+        "6. Never pass dict/JSON to tools — plain string only. EXCEPTION: Zoho tools require structured dict arguments as specified below.\n"
         "7. If user asks about mail id of HR head, HR, or any member → use Policy_RAG_Implementation tool.\n\n"
 
         "--- ZOHO MAIL RULES (MANDATORY - never skip any step) ---\n"
+
+        "READING EMAILS:\n"
+        "  Step 1: ALWAYS call ZohoMail_getMailAccounts first — no exceptions.\n"
+        "  Step 2: Extract accountId from data[0].accountId — MUST be treated as a STRING.\n"
+        "  Step 3: Call ZohoMail_getAllFolders with EXACTLY this structure:\n"
+        "    {\n"
+        "      'path_variables': {'accountId': '<accountId from Step 2 as string>'},\n"
+        "      'query_params': {'fields': 'folderId,folderName'}\n"
+        "    }\n"
+        "  Step 4: From the response data[], find the entry where folderName = 'Inbox'.\n"
+        "          Extract its folderId — MUST be treated as a STRING (e.g., '2560636000000008014').\n"
+        "          NEVER use the string 'Inbox' or 'INBOX' as the folderId.\n"
+        "  Step 5: Call ZohoMail_listEmails with EXACTLY this structure:\n"
+        "    {\n"
+        "      'path_variables': {'accountId': '<accountId from Step 2 as string>'},\n"
+        "      'query_params': {\n"
+        "        'folderId': '<folderId from Step 4 as string>',\n"
+        "        'fields': 'subject,messageId,folderId,fromAddress,toAddress,receivedTime',\n"
+        "        'limit': 10,\n"
+        "        'sortBy': 'date',\n"
+        "        'sortorder': false,\n"
+        "        'status': 'all'\n"
+        "      }\n"
+        "    }\n"
+        "  CRITICAL TYPE RULES for email reading:\n"
+        "    - accountId → always a string, never an integer\n"
+        "    - folderId  → always a string, never an integer\n"
+        "    - sortorder → always boolean false, never the string 'False'\n"
+        "  Step 6: Display emails as a numbered clean list: No. | From | Subject | Date\n\n"
+
         "SENDING EMAIL (ZohoMail_sendEmail):\n"
         "  Step 1: ALWAYS call ZohoMail_getMailAccounts first — no exceptions.\n"
-        "  Step 2: Extract accountId and fromAddress from the first account in the response (data[0]).\n"
-        "  Step 3: Call ZohoMail_sendEmail with:\n"
-        "    - path_variables.accountId → from Step 2\n"
-        "    - body.fromAddress        → from Step 2 (must match account exactly)\n"
-        "    - body.toAddress          → recipient email\n"
-        "    - body.subject            → email subject\n"
-        "    - body.content            → email body (HTML format by default)\n"
-        "    - body.mailFormat         → 'html' (default) or 'plaintext'\n\n"
+        "  Step 2: Extract accountId (as string) and fromAddress from data[0] in the response.\n"
+        "  Step 3: ALWAYS confirm with user — show preview: To, Subject, first 100 chars of content. Ask 'Shall I send this?'\n"
+        "  Step 4: Only after user confirms, call ZohoMail_sendEmail with EXACTLY this structure:\n"
+        "    {\n"
+        "      'path_variables': {'accountId': '<accountId from Step 2 as string>'},\n"
+        "      'body': {\n"
+        "        'fromAddress': '<fromAddress from Step 2>',\n"
+        "        'toAddress': '<recipient email>',\n"
+        "        'subject': '<email subject>',\n"
+        "        'content': '<email body>',\n"
+        "        'mailFormat': 'html'\n"
+        "      }\n"
+        "    }\n\n"
+
         "REPLYING TO EMAIL (ZohoMail_sendReplyEmail):\n"
-        "  Step 1: ALWAYS call ZohoMail_getMailAccounts first.\n"
-        "  Step 2: Extract accountId and fromAddress from the response.\n"
-        "  Step 3: If you don't have the messageId, call list_emails to find it.\n"
-        "  Step 4: Call ZohoMail_sendReplyEmail with:\n"
-        "    - path_variables.accountId  → from Step 2\n"
-        "    - path_variables.messageId  → from Step 3\n"
-        "    - body.action               → always 'reply'\n"
-        "    - body.fromAddress          → from Step 2\n"
-        "    - body.toAddress            → original sender's address\n"
-        "    - body.content              → reply content\n\n"
-        "READING EMAILS:\n"
-        "  Step 1: Call list_emails to get recent emails with messageId and folderId.\n"
-        "  Step 2: Call read_email with the messageId and folderId to get full content.\n\n"
+        "  Step 1: ALWAYS call ZohoMail_getMailAccounts first — no exceptions.\n"
+        "  Step 2: Extract accountId (as string) and fromAddress from data[0] in the response.\n"
+        "  Step 3: If messageId is not known, follow READING EMAILS steps 3–5 to find it.\n"
+        "  Step 4: ALWAYS confirm with user before sending — show preview: To, Subject, first 100 chars of content.\n"
+        "  Step 5: Only after user confirms, call ZohoMail_sendReplyEmail with EXACTLY this structure:\n"
+        "    {\n"
+        "      'path_variables': {\n"
+        "        'accountId': '<accountId from Step 2 as string>',\n"
+        "        'messageId': '<messageId from Step 3 as string>'\n"
+        "      },\n"
+        "      'body': {\n"
+        "        'action': 'reply',\n"
+        "        'fromAddress': '<fromAddress from Step 2>',\n"
+        "        'toAddress': '<original sender address>',\n"
+        "        'content': '<reply content>'\n"
+        "      }\n"
+        "    }\n\n"
+
         "MAIL RULES — NEVER break these:\n"
-        "  - NEVER guess, hardcode, or reuse a previous accountId.\n"
-        "  - NEVER call sendEmail or sendReplyEmail without calling getMailAccounts first.\n"
+        "  - NEVER guess, hardcode, or reuse a previous accountId from memory or history.\n"
+        "  - NEVER call any Zoho tool without first calling ZohoMail_getMailAccounts.\n"
+        "  - NEVER pass accountId or messageId as top-level arguments — always inside path_variables.\n"
+        "  - NEVER pass folderId inside path_variables — it always goes inside query_params.\n"
+        "  - NEVER use 'Inbox', 'INBOX', or any folder name string as a folderId value.\n"
+        "  - NEVER pass accountId, folderId, or messageId as integers — always convert to string.\n"
+        "  - NEVER pass sortorder as the string 'False' or 'True' — always use boolean false or true.\n"
         "  - NEVER fabricate email addresses — always confirm with the user if unsure.\n"
-        "  - ALWAYS confirm with the user before sending (show a summary: To, Subject, Content).\n"
-        "  - If Zoho returns an error, report the exact error message to the user.\n\n"
+        "  - ALWAYS confirm with the user before sending or replying to any email.\n"
+        "  - If Zoho returns an error, report the exact error message to the user — do not guess the cause.\n\n"
 
         "--- OUTPUT RULES ---\n"
         "- For Weather: Provide a friendly, concise update (e.g., 'It's a sunny 37°C in Kochi today').\n"
         "- For News: Present only the top 5 bullet points with sources. If a category is empty, show general news instead.\n"
+        "- For Email list: Show a numbered table — No. | From | Subject | Date. Keep it clean and readable.\n"
         "- For Email confirmation: Show a preview card — To, Subject, and first 100 chars of content — and ask 'Shall I send this?'\n"
         "- 'Next/Upcoming' → single closest result only.\n"
         "- 'List/All' → full list.\n"
@@ -262,13 +370,18 @@ async def assistant_node(state: State) -> dict:
         "- Keep responses concise and professional.\n"
     )
 
-    history = state["messages"][-5:]
+    history = _smart_history(state["messages"])
     has_human = any(isinstance(m, HumanMessage) for m in history)
     if not has_human:
         return {"messages": [AIMessage(content="I'm here to help! What would you like to know?")]}    
     messages = [SystemMessage(content=system_content)] + history  # type: ignore # Sliding window of last 5 messages
 
     response = await llm.ainvoke(messages)
+    logger.error("[assistant_node] LLM response type=%s tool_calls=%s content=%s",
+        type(response).__name__,
+        getattr(response, 'tool_calls', None),
+        str(response.content)[:300]
+    )
     return {"messages": [response]}
 
 
