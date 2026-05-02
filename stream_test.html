@@ -1,0 +1,986 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>HRMS AI Assistant</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg:         #0a0b0f;
+            --surface:    #10121a;
+            --surface2:   #161923;
+            --border:     rgba(255,255,255,0.07);
+            --border2:    rgba(255,255,255,0.12);
+            --accent:     #5b7cfa;
+            --accent2:    #a78bfa;
+            --warn:       #f59e0b;
+            --danger:     #f87171;
+            --success:    #34d399;
+            --text:       #e2e8f0;
+            --text-muted: #64748b;
+            --text-dim:   #94a3b8;
+            --user-color: #818cf8;
+            --glow: rgba(91,124,250,0.15);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Space Mono', monospace;
+            background: var(--bg);
+            color: var(--text);
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* ─── Noise texture overlay ─────────────────────── */
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 0;
+            opacity: 0.025;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+            background-size: 200px 200px;
+        }
+
+        /* ─── Sidebar ───────────────────────────────────── */
+        #sidebar {
+            width: 260px;
+            min-width: 260px;
+            background: var(--surface);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            z-index: 1;
+        }
+
+        #sidebar-header {
+            padding: 20px 16px 14px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        #sidebar-title {
+            font-family: 'Syne', sans-serif;
+            font-weight: 800;
+            font-size: 11px;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            color: var(--accent);
+            margin-bottom: 12px;
+        }
+
+        #newChatBtn {
+            width: 100%;
+            padding: 10px 14px;
+            background: transparent;
+            color: var(--accent);
+            border: 1px solid var(--accent);
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+            font-family: 'Space Mono', monospace;
+            font-weight: 700;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        #newChatBtn:hover {
+            background: var(--accent);
+            color: #fff;
+            box-shadow: 0 0 18px var(--glow);
+        }
+        #newChatBtn::before { content: '+'; font-size: 16px; line-height: 1; }
+
+        #convList { flex: 1; overflow-y: auto; padding: 8px 0; }
+
+        .conv-item {
+            padding: 10px 16px;
+            cursor: pointer;
+            border-bottom: 1px solid var(--border);
+            transition: background 0.15s;
+            position: relative;
+        }
+        .conv-item::before {
+            content: '';
+            position: absolute;
+            left: 0; top: 0; bottom: 0;
+            width: 2px;
+            background: var(--accent);
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+        .conv-item:hover { background: var(--surface2); }
+        .conv-item:hover::before { opacity: 0.5; }
+        .conv-item.active { background: var(--surface2); }
+        .conv-item.active::before { opacity: 1; }
+
+        .conv-id {
+            font-size: 10px;
+            color: var(--text-dim);
+            font-family: 'Space Mono', monospace;
+            letter-spacing: 0.3px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .conv-item.active .conv-id { color: var(--text); }
+
+        .conv-time {
+            color: var(--text-muted);
+            font-size: 9px;
+            margin-top: 3px;
+            font-family: 'Space Mono', monospace;
+        }
+
+        /* ─── Main ──────────────────────────────────────── */
+        #main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            position: relative;
+            z-index: 1;
+        }
+
+        /* ─── Top bar ───────────────────────────────────── */
+        #topbar {
+            padding: 0 24px;
+            height: 56px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border);
+            background: var(--surface);
+            flex-shrink: 0;
+        }
+
+        #topbar-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        #status-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--success);
+            box-shadow: 0 0 8px var(--success);
+            animation: pulse 2.5s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; box-shadow: 0 0 8px var(--success); }
+            50% { opacity: 0.6; box-shadow: 0 0 16px var(--success); }
+        }
+
+        #header-title {
+            font-family: 'Syne', sans-serif;
+            font-weight: 700;
+            font-size: 14px;
+            color: var(--text);
+            letter-spacing: 0.5px;
+        }
+
+        #header-tag {
+            font-size: 9px;
+            background: rgba(91,124,250,0.12);
+            color: var(--accent);
+            border: 1px solid rgba(91,124,250,0.25);
+            border-radius: 3px;
+            padding: 2px 7px;
+            font-family: 'Space Mono', monospace;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+
+        #threadLabel {
+            font-size: 9px;
+            color: var(--text-muted);
+            font-family: 'Space Mono', monospace;
+            max-width: 260px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* ─── Chat output ───────────────────────────────── */
+        #output-wrap {
+            flex: 1;
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* Subtle gradient fade at top */
+        #output-wrap::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 32px;
+            background: linear-gradient(to bottom, var(--bg), transparent);
+            pointer-events: none;
+            z-index: 2;
+        }
+
+        #output {
+            height: 100%;
+            overflow-y: auto;
+            padding: 24px 28px 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        #output .empty-state {
+            margin: auto;
+            text-align: center;
+        }
+
+        #output .empty-state .big-icon {
+            font-size: 36px;
+            margin-bottom: 12px;
+            opacity: 0.3;
+        }
+
+        #output .empty-state p {
+            font-size: 12px;
+            color: var(--text-muted);
+            letter-spacing: 0.5px;
+        }
+
+        /* ─── Message rows ──────────────────────────────── */
+        .msg-row {
+            display: flex;
+            gap: 12px;
+            padding: 10px 0;
+            animation: fadeIn 0.25s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(6px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+
+        .msg-row.user { justify-content: flex-end; }
+
+        .msg-avatar {
+            width: 28px;
+            height: 28px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            flex-shrink: 0;
+            margin-top: 2px;
+            font-family: 'Syne', sans-serif;
+            font-weight: 800;
+        }
+
+        .avatar-user {
+            background: rgba(129,140,248,0.15);
+            border: 1px solid rgba(129,140,248,0.3);
+            color: var(--user-color);
+        }
+
+        .avatar-ai {
+            background: rgba(91,124,250,0.12);
+            border: 1px solid rgba(91,124,250,0.25);
+            color: var(--accent);
+        }
+
+        .msg-bubble {
+            max-width: 72%;
+            padding: 10px 14px;
+            border-radius: 6px;
+            font-size: 12.5px;
+            line-height: 1.7;
+            word-break: break-word;
+        }
+
+        .bubble-user {
+            background: rgba(129,140,248,0.1);
+            border: 1px solid rgba(129,140,248,0.2);
+            color: var(--text);
+        }
+
+        .bubble-ai {
+            background: var(--surface2);
+            border: 1px solid var(--border2);
+            color: var(--text);
+        }
+
+        /* ─── Special message types ─────────────────────── */
+        .meta-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 3px 0;
+        }
+
+        .meta-badge {
+            font-size: 9px;
+            font-family: 'Space Mono', monospace;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            padding: 2px 7px;
+            border-radius: 3px;
+            flex-shrink: 0;
+        }
+
+        .badge-tool {
+            background: rgba(220,220,170,0.08);
+            border: 1px solid rgba(220,220,170,0.2);
+            color: #dcdcaa;
+        }
+
+        .badge-guard {
+            background: rgba(206,145,120,0.08);
+            border: 1px solid rgba(206,145,120,0.2);
+            color: #ce9178;
+        }
+
+        .badge-error {
+            background: rgba(248,113,113,0.08);
+            border: 1px solid rgba(248,113,113,0.2);
+            color: var(--danger);
+        }
+
+        .meta-text {
+            font-size: 11px;
+            color: var(--text-dim);
+        }
+
+        /* Interrupt banner */
+        .interrupt-banner {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 12px 14px;
+            background: rgba(245,158,11,0.06);
+            border: 1px solid rgba(245,158,11,0.25);
+            border-left: 3px solid var(--warn);
+            border-radius: 4px;
+            margin: 4px 0;
+            animation: fadeIn 0.25s ease;
+        }
+
+        .interrupt-icon {
+            font-size: 13px;
+            flex-shrink: 0;
+            margin-top: 1px;
+        }
+
+        .interrupt-text {
+            font-size: 12px;
+            color: #fbbf24;
+            line-height: 1.6;
+            font-family: 'Space Mono', monospace;
+        }
+
+        /* ─── Bottom input zone ─────────────────────────── */
+        #input-zone {
+            padding: 16px 24px 20px;
+            background: var(--surface);
+            border-top: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+
+        /* Normal row */
+        #normalRow {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        #msg {
+            flex: 1;
+            padding: 11px 14px;
+            background: var(--bg);
+            border: 1px solid var(--border2);
+            border-radius: 5px;
+            color: var(--text);
+            font-size: 12.5px;
+            font-family: 'Space Mono', monospace;
+            outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        #msg::placeholder { color: var(--text-muted); }
+        #msg:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(91,124,250,0.08);
+        }
+        #msg:disabled { opacity: 0.35; cursor: not-allowed; }
+
+        #sendBtn, #refreshBtn {
+            padding: 11px 18px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-family: 'Space Mono', monospace;
+            font-size: 12px;
+            font-weight: 700;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+
+        #sendBtn {
+            background: var(--accent);
+            color: #fff;
+            letter-spacing: 0.5px;
+        }
+        #sendBtn:hover:not(:disabled) {
+            background: #7c9dff;
+            box-shadow: 0 0 18px rgba(91,124,250,0.35);
+        }
+        #sendBtn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+        #refreshBtn {
+            padding: 11px 13px;
+            background: transparent;
+            color: var(--text-muted);
+            border: 1px solid var(--border2);
+            font-size: 15px;
+        }
+        #refreshBtn:hover { color: var(--text); border-color: var(--accent); }
+
+        /* ─── Interrupt row ─────────────────────────────── */
+        #interruptRow {
+            display: none;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        #interruptLabel {
+            font-size: 11px;
+            color: var(--warn);
+            font-family: 'Space Mono', monospace;
+            letter-spacing: 0.3px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        #interruptLabel::before {
+            content: '⚡';
+            font-size: 12px;
+        }
+
+        #interruptInnerRow {
+            display: flex;
+            gap: 8px;
+        }
+
+        #interruptInput {
+            flex: 1;
+            padding: 11px 14px;
+            background: var(--bg);
+            border: 1px solid rgba(245,158,11,0.35);
+            border-radius: 5px;
+            color: var(--text);
+            font-size: 12.5px;
+            font-family: 'Space Mono', monospace;
+            outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        #interruptInput::placeholder { color: var(--text-muted); }
+        #interruptInput:focus {
+            border-color: var(--warn);
+            box-shadow: 0 0 0 3px rgba(245,158,11,0.08);
+        }
+        #interruptInput:disabled { opacity: 0.35; cursor: not-allowed; }
+
+        #interruptSendBtn {
+            padding: 11px 18px;
+            background: var(--warn);
+            color: #000;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 700;
+            font-family: 'Space Mono', monospace;
+            letter-spacing: 0.5px;
+            transition: all 0.2s;
+        }
+        #interruptSendBtn:hover:not(:disabled) {
+            background: #fbbf24;
+            box-shadow: 0 0 16px rgba(245,158,11,0.3);
+        }
+        #interruptSendBtn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+        /* hint bar */
+        #hint-bar {
+            margin-top: 8px;
+            font-size: 10px;
+            color: var(--text-muted);
+            font-family: 'Space Mono', monospace;
+            display: flex;
+            gap: 18px;
+        }
+        #hint-bar span { display: flex; align-items: center; gap: 4px; }
+        #hint-bar kbd {
+            background: var(--surface2);
+            border: 1px solid var(--border2);
+            border-radius: 3px;
+            padding: 1px 5px;
+            font-size: 9px;
+            font-family: 'Space Mono', monospace;
+            color: var(--text-dim);
+        }
+
+        /* ─── Scrollbar ─────────────────────────────────── */
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.15); }
+
+        /* ─── Stream cursor ─────────────────────────────── */
+        .cursor {
+            display: inline-block;
+            width: 7px;
+            height: 13px;
+            background: var(--accent);
+            margin-left: 2px;
+            vertical-align: text-bottom;
+            border-radius: 1px;
+            animation: blink 0.9s step-end infinite;
+        }
+        @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+    </style>
+</head>
+<body>
+
+<!-- Sidebar -->
+<div id="sidebar">
+    <div id="sidebar-header">
+        <div id="sidebar-title">Sessions</div>
+        <button id="newChatBtn" onclick="newChat()">New conversation</button>
+    </div>
+    <div id="convList">
+        <div style="padding:16px;color:var(--text-muted);font-size:10px;font-family:'Space Mono',monospace;">Loading sessions…</div>
+    </div>
+</div>
+
+<!-- Main -->
+<div id="main">
+
+    <!-- Top bar -->
+    <div id="topbar">
+        <div id="topbar-left">
+            <div id="status-dot"></div>
+            <span id="header-title">HRMS Assistant</span>
+            <span id="header-tag">AI · Macom</span>
+        </div>
+        <span id="threadLabel"></span>
+    </div>
+
+    <!-- Chat output -->
+    <div id="output-wrap">
+        <div id="output">
+            <div class="empty-state">
+                <div class="big-icon">◈</div>
+                <p>Start a conversation or pick a session</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Input zone -->
+    <div id="input-zone">
+
+        <div id="normalRow">
+            <input id="msg" type="text" placeholder="Ask anything about leaves, payroll, attendance…" autocomplete="off" />
+            <button id="sendBtn">Send</button>
+            <button id="refreshBtn" onclick="loadConversations()" title="Refresh sessions">↻</button>
+        </div>
+
+        <div id="interruptRow">
+            <div id="interruptLabel">Awaiting your response</div>
+            <div id="interruptInnerRow">
+                <input id="interruptInput" type="text" placeholder="Type your reply…" autocomplete="off" />
+                <button id="interruptSendBtn">Reply</button>
+            </div>
+        </div>
+
+        <div id="hint-bar">
+            <span><kbd>Enter</kbd> to send</span>
+            <span><kbd>↻</kbd> refresh sessions</span>
+        </div>
+    </div>
+</div>
+
+<script>
+    var EMP_CODE  = 100606;
+    var FIRM_ID   = 3;
+    var EMP_NAME  = "Anika";
+    var ROLE_ID   = 5;
+    var FIRM_NAME = "Macom";
+
+    var threadId = "thread-" + Math.random().toString(36).slice(2);
+
+    var output           = document.getElementById("output");
+    var normalRow        = document.getElementById("normalRow");
+    var interruptRow     = document.getElementById("interruptRow");
+    var msgInput         = document.getElementById("msg");
+    var sendBtn          = document.getElementById("sendBtn");
+    var interruptInput   = document.getElementById("interruptInput");
+    var interruptSendBtn = document.getElementById("interruptSendBtn");
+    var interruptLabel   = document.getElementById("interruptLabel");
+    var threadLabel      = document.getElementById("threadLabel");
+
+    sendBtn.addEventListener("click", sendMessage);
+    msgInput.addEventListener("keydown", function(e) {
+        if (e.key === "Enter" && !sendBtn.disabled) sendMessage();
+    });
+    interruptSendBtn.addEventListener("click", sendResume);
+    interruptInput.addEventListener("keydown", function(e) {
+        if (e.key === "Enter" && !interruptSendBtn.disabled) sendResume();
+    });
+
+    function showNormalInput() {
+        normalRow.style.display     = "flex";
+        interruptRow.style.display  = "none";
+        msgInput.disabled           = false;
+        sendBtn.disabled            = false;
+        interruptInput.disabled     = false;
+        interruptSendBtn.disabled   = false;
+        interruptInput.value        = "";
+        msgInput.focus();
+    }
+
+    function showInterruptInput(msg) {
+        normalRow.style.display     = "none";
+        interruptRow.style.display  = "flex";
+        interruptInput.disabled     = false;
+        interruptSendBtn.disabled   = false;
+        interruptInput.value        = "";
+        interruptLabel.textContent  = msg;
+        interruptInput.focus();
+    }
+
+    function disableNormalInput() {
+        msgInput.disabled = true;
+        sendBtn.disabled  = true;
+    }
+
+    function disableInterruptInput() {
+        interruptInput.disabled   = true;
+        interruptSendBtn.disabled = true;
+    }
+
+    /* ─── Output helpers ─────────────────────────────── */
+
+    function clearEmpty() {
+        var es = output.querySelector(".empty-state");
+        if (es) es.remove();
+    }
+
+    function appendUser(text) {
+        clearEmpty();
+        var row = document.createElement("div");
+        row.className = "msg-row user";
+        row.innerHTML =
+            "<div class='msg-bubble bubble-user'>" + escHtml(text) + "</div>" +
+            "<div class='msg-avatar avatar-user'>You</div>";
+        output.appendChild(row);
+        scrollBottom();
+    }
+
+    function appendAssistant(text) {
+        clearEmpty();
+        var row = document.createElement("div");
+        row.className = "msg-row";
+        row.innerHTML =
+            "<div class='msg-avatar avatar-ai'>AI</div>" +
+            "<div class='msg-bubble bubble-ai'>" + escHtml(text) + "</div>";
+        output.appendChild(row);
+        scrollBottom();
+    }
+
+    function appendMeta(type, text) {
+        clearEmpty();
+        var icons = { tool: "⚙", guard: "🛡", error: "✗" };
+        var row = document.createElement("div");
+        row.className = "meta-row";
+        row.innerHTML =
+            "<span class='meta-badge badge-" + type + "'>" + (icons[type] || "") + " " + type + "</span>" +
+            "<span class='meta-text'>" + escHtml(text) + "</span>";
+        output.appendChild(row);
+        scrollBottom();
+    }
+
+    function appendInterruptBanner(text) {
+        clearEmpty();
+        var el = document.createElement("div");
+        el.className = "interrupt-banner";
+        el.innerHTML =
+            "<span class='interrupt-icon'>⚡</span>" +
+            "<span class='interrupt-text'>" + escHtml(text) + "</span>";
+        output.appendChild(el);
+        scrollBottom();
+    }
+
+    /* Creates a streaming bubble, returns { bubble, addToken, finish } */
+    function createStreamBubble() {
+        clearEmpty();
+        var row = document.createElement("div");
+        row.className = "msg-row";
+
+        var bubble = document.createElement("div");
+        bubble.className = "msg-bubble bubble-ai";
+
+        var cursor = document.createElement("span");
+        cursor.className = "cursor";
+        bubble.appendChild(cursor);
+
+        row.innerHTML = "<div class='msg-avatar avatar-ai'>AI</div>";
+        row.appendChild(bubble);
+        output.appendChild(row);
+        scrollBottom();
+
+        return {
+            addToken: function(t) {
+                bubble.insertBefore(document.createTextNode(t), cursor);
+                scrollBottom();
+            },
+            addMeta: function(type, text) {
+                var icons = { tool: "⚙", guard: "🛡", error: "✗" };
+                var m = document.createElement("div");
+                m.className = "meta-row";
+                m.style.marginTop = "6px";
+                m.innerHTML =
+                    "<span class='meta-badge badge-" + type + "'>" + (icons[type]||"") + " " + type + "</span>" +
+                    "<span class='meta-text'>" + escHtml(text) + "</span>";
+                bubble.insertBefore(m, cursor);
+                scrollBottom();
+            },
+            finish: function() {
+                cursor.remove();
+            },
+            remove: function() {
+                row.remove();
+            }
+        };
+    }
+
+    function scrollBottom() {
+        output.scrollTop = output.scrollHeight;
+    }
+
+    /* ─── Sidebar ─────────────────────────────────────── */
+
+    async function loadConversations() {
+        try {
+            var res  = await fetch("/db/conversations/user", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ emp_code: EMP_CODE })
+            });
+            var data = await res.json();
+            var list = document.getElementById("convList");
+            var convs = data.conversations || [];
+
+            if (convs.length === 0) {
+                list.innerHTML = "<div style='padding:16px;color:var(--text-muted);font-size:10px;font-family:Space Mono,monospace;'>No sessions yet</div>";
+                return;
+            }
+
+            list.innerHTML = convs.map(function(c) {
+                var active = c.thread_id === threadId ? " active" : "";
+                var time   = new Date(c.last_active).toLocaleString();
+                return "<div class='conv-item" + active + "' onclick='loadThread(\"" + c.thread_id + "\")' title='" + c.thread_id + "'>" +
+                    "<div class='conv-id'>" + escHtml(c.thread_id.slice(0,24)) + "…</div>" +
+                    "<div class='conv-time'>" + time + "</div></div>";
+            }).join("");
+        } catch(e) {
+            document.getElementById("convList").innerHTML =
+                "<div style='padding:12px;color:var(--danger);font-size:10px;'>Load failed: " + escHtml(e.message) + "</div>";
+        }
+    }
+
+    async function loadThread(tid) {
+        threadId = tid;
+        threadLabel.textContent = tid;
+        showNormalInput();
+
+        document.querySelectorAll(".conv-item").forEach(function(el) {
+            el.classList.toggle("active", el.title === tid);
+        });
+
+        output.innerHTML = "<div style='color:var(--text-muted);font-size:11px;padding:8px 0;font-family:Space Mono,monospace;'>Loading session…</div>";
+
+        try {
+            var res  = await fetch("/db/conversation", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ emp_code: EMP_CODE, thread_id: tid })
+            });
+            var data = await res.json();
+
+            if (!res.ok) {
+                output.innerHTML = "<div class='meta-row'><span class='meta-badge badge-error'>✗ error</span><span class='meta-text'>" + escHtml(data.detail || JSON.stringify(data)) + "</span></div>";
+                return;
+            }
+
+            var msgs = data.conversation || [];
+            if (msgs.length === 0) {
+                output.innerHTML = "<div class='empty-state'><div class='big-icon'>◈</div><p>No messages yet in this session</p></div>";
+                return;
+            }
+
+            output.innerHTML = "";
+            msgs.forEach(function(m) {
+                if (m.role === "user") appendUser(m.content);
+                else appendAssistant(m.content);
+            });
+        } catch(e) {
+            output.innerHTML = "<div class='meta-row'><span class='meta-badge badge-error'>✗ error</span><span class='meta-text'>" + escHtml(e.message) + "</span></div>";
+        }
+    }
+
+    function newChat() {
+        threadId = "thread-" + Math.random().toString(36).slice(2);
+        threadLabel.textContent = threadId;
+        output.innerHTML = "<div class='empty-state'><div class='big-icon'>◈</div><p>Start a conversation…</p></div>";
+        showNormalInput();
+        document.querySelectorAll(".conv-item").forEach(function(el) { el.classList.remove("active"); });
+    }
+
+    /* ─── Send message ────────────────────────────────── */
+
+    async function sendMessage() {
+        var msg = msgInput.value.trim();
+        if (!msg) return;
+        msgInput.value = "";
+        disableNormalInput();
+        appendUser(msg);
+
+        var stream = createStreamBubble();
+
+        try {
+            var res = await fetch("/chat/stream", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    message: msg, thread_id: threadId,
+                    emp_code: EMP_CODE, firm_id: FIRM_ID,
+                    emp_name: EMP_NAME, role_id: ROLE_ID, firm_name: FIRM_NAME
+                })
+            });
+
+            if (!res.ok) {
+                stream.finish();
+                stream.addMeta("error", "HTTP " + res.status);
+                showNormalInput();
+                return;
+            }
+
+            var reader      = res.body.getReader();
+            var decoder     = new TextDecoder();
+            var buffer      = "";
+            var interrupted = false;
+
+            while (true) {
+                var r = await reader.read();
+                if (r.done) break;
+                buffer += decoder.decode(r.value, { stream: true });
+                var parts = buffer.split("\n\n");
+                buffer = parts.pop();
+
+                for (var i = 0; i < parts.length; i++) {
+                    var line = parts[i].trim();
+                    if (!line.startsWith("data: ")) continue;
+                    try {
+                        var evt = JSON.parse(line.slice(6));
+
+                        if (evt.type === "token") {
+                            stream.addToken(evt.content);
+
+                        } else if (evt.type === "tool_start") {
+                            stream.addMeta("tool", "Calling " + evt.tool + "…");
+
+                        } else if (evt.type === "tool_end") {
+                            stream.addMeta("tool", "Done");
+
+                        } else if (evt.type === "guardrail") {
+                            stream.addMeta("guard", evt.content);
+
+                        } else if (evt.type === "interrupt") {
+                            stream.finish();
+                            stream.remove();
+                            if (evt.thread_id) threadId = evt.thread_id;
+                            appendInterruptBanner(evt.content);
+                            interrupted = true;
+                            showInterruptInput(evt.content);
+
+                        } else if (evt.type === "error") {
+                            stream.addMeta("error", evt.content);
+
+                        } else if (evt.type === "done") {
+                            stream.finish();
+                            loadConversations();
+                            if (!interrupted) showNormalInput();
+                        }
+
+                        scrollBottom();
+                    } catch(pe) {}
+                }
+            }
+        } catch(err) {
+            stream.finish();
+            appendMeta("error", "Fetch failed: " + err.message);
+            showNormalInput();
+        }
+    }
+
+    /* ─── Resume interrupt ────────────────────────────── */
+
+    async function sendResume() {
+        var decision = interruptInput.value.trim();
+        if (!decision) return;
+        appendUser(decision);
+        disableInterruptInput();
+
+        try {
+            var res  = await fetch("/chat/resume", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ thread_id: threadId, decision: decision, emp_code: EMP_CODE })
+            });
+            var data = await res.json();
+
+            if (data.status === "waiting_for_input") {
+                appendInterruptBanner(data.response);
+                showInterruptInput(data.response);
+            } else {
+                appendAssistant(data.response);
+                showNormalInput();
+            }
+            loadConversations();
+        } catch(err) {
+            appendMeta("error", "Resume failed: " + err.message);
+            showNormalInput();
+        }
+    }
+
+    /* ─── Util ────────────────────────────────────────── */
+
+    function escHtml(str) {
+        return String(str)
+            .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    }
+
+    // Init
+    threadLabel.textContent = threadId;
+    showNormalInput();
+    loadConversations();
+</script>
+</body>
+</html>
