@@ -84,6 +84,9 @@ async def _fetch_schemas(emp_code: int, url: str) -> list[dict]:
             }
             for t in tools
         ]
+        for s in schemas:
+            if s["name"] == "ZohoMail_sendEmail":
+                logger.debug("[MCP_SCHEMA] ZohoMail_sendEmail inputSchema=%s", json.dumps(s['inputSchema']))
         logger.info("[zoho:%s] Got %d schemas: %s", emp_code, len(schemas), [s["name"] for s in schemas])
         return schemas
     except BaseException as exc:
@@ -130,12 +133,13 @@ class _ZohoTool(BaseTool):
         if list(kwargs.keys()) == ['kwargs'] and isinstance(kwargs['kwargs'], dict):
             kwargs = kwargs['kwargs']
         
-        logger.info("[ZohoTool] %s args=%s", self.name, kwargs)
+        print(f"[ZOHO_ARUN] {self.name} kwargs={json.dumps(kwargs, default=str)[:200]}")
         try:
             response = await _do_call_tool(self.zoho_url, self.name, kwargs)
-            logger.info("[ZohoTool] %s response=%s", self.name, response)
+            print(f"[ZOHO_ARUN] {self.name} response={str(response)[:200]}")
             return response
         except Exception as exc:
+            print(f"[ZOHO_ARUN] {self.name} EXCEPTION={exc}")
             logger.error("[ZohoTool] %s failed: [%s] %s", self.name, type(exc).__name__, exc)
             return f"Tool call failed: {exc}"
 
@@ -149,11 +153,23 @@ class _ZohoTool(BaseTool):
             args = {}
             tool_call_id = ""
 
-        # Unwrap nested kwargs if present
-        if list(args.keys()) == ['kwargs'] and isinstance(args.get('kwargs'), dict):
-            args = args['kwargs']
+        # Unwrap nested kwargs if present (dict or JSON string)
+        if list(args.keys()) == ['kwargs']:
+            inner = args['kwargs']
+            if isinstance(inner, str):
+                try:
+                    inner = json.loads(inner)
+                except Exception:
+                    pass
+            if isinstance(inner, dict):
+                args = inner
 
-        result = await self._arun(**args)
+        # Pass args as-is to MCP — keep path_variables, query_params, body all nested
+        # MCP server expects the exact structure from the tool schema
+        flat = dict(args)  # shallow copy, no flattening
+
+        logger.info("[ZohoTool.ainvoke] %s flat=%s", self.name, json.dumps(flat, default=str)[:200])
+        result = await self._arun(**flat)
         return ToolMessage(content=result, tool_call_id=tool_call_id, name=self.name)
 
 

@@ -55,3 +55,5 @@ def assert_token_matches_emp(token_payload: dict, emp_code: int):
             status_code=403,
             detail=f"Token identity '{token_user}' does not match emp_code '{request_user}'."
         )
+    
+    return True

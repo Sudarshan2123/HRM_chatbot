@@ -2,6 +2,9 @@ import json
 import os
 from fastapi.middleware.cors import CORSMiddleware
 import urllib
+
+from urllib3 import request
+from src.entity._init_ import TextRequest, TextToSpeechRequest
 from src.entity.responseHelper import *
 from src.entity.DBHelper import *
 from src.entity.tokenHelper import *
@@ -12,6 +15,7 @@ from src.utils.common import decrypt_credentials
 from src.utils.security import check_no_query_params
 from src.server.zoho_key_store import save_zoho_key, get_zoho_key, has_zoho_key
 from statenode import *
+from src.utils.Text_To_Speach import TextToSpeach
 
 os.environ["FASTEMBED_CACHE_PATH"] = "C:/fastembed_models"
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
@@ -54,7 +58,7 @@ async def lifespan(app: FastAPI):
 
         print("Creating Agentic Graph...")
         _graph = create_intent_driven_agent(checkpointer=checkpointer)
-
+        app.state.tts_engine = TextToSpeach()   
         yield
     finally:
         print("Shutting down: Closing sessions...")
@@ -203,13 +207,6 @@ async def chat_stream(req: ChatRequest, token_payload: dict = Depends(verify_tok
     thread_id = req.thread_id or str(uuid.uuid4())
     config    = {"configurable": {"thread_id": thread_id}}
 
-    # ── Ownership check ───────────────────────────────────────────────
-    # A thread is "new" if it has no row in user_conversations yet.
-    # We cannot rely on is_new_thread = not req.thread_id because the
-    # frontend always generates and sends a thread_id from page load.
-    # Instead: if the thread already exists in DB, verify it belongs to
-    # this user. If it doesn't exist yet, it's a genuinely new thread —
-    # skip the check and let save_user_thread establish ownership below.
     thread_exists = await verify_thread_ownership(req.emp_code, thread_id)
     thread_in_db  = await execute_query_single(
         "SELECT thread_id FROM user_conversations WHERE thread_id = %s",
@@ -303,6 +300,20 @@ async def chat_stream(req: ChatRequest, token_payload: dict = Depends(verify_tok
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
     )
 
+@app.post("/text-to-speech")
+async def text_to_speech(req: TextRequest, data: TextToSpeechRequest = Body(...),token_payload: dict = Depends(verify_token)):
+    try:
+        assert_token_matches_emp(token_payload, req.emp_code)
+        tts_engine = request.app.state.tts_engine
+        response=tts_engine.Text_to_speech_process(data,token_payload)
+        return response
+                 
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail=e.errors())  
+    
+    except Exception as e:
+        logger.error(f"Error in /text-to-speech: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ── DB Read Endpoints ──────────────────────────────────────
 
@@ -335,6 +346,7 @@ async def get_user_conversations(req: UserConversationsRequest):
         WHERE uc.emp_code = %s
         GROUP BY uc.thread_id, uc.created_at, uc.last_active
         ORDER BY uc.last_active DESC
+        limit 10
         """,
         (req.emp_code,)
     )
@@ -367,6 +379,7 @@ async def list_all_conversations():
         FROM checkpoints
         GROUP BY thread_id
         ORDER BY latest_checkpoint DESC
+        limit 10
         """
     )
 

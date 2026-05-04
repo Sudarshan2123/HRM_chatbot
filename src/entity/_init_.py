@@ -51,7 +51,6 @@ class TranslationRequest(BaseModel):
 class TextToSpeechRequest(BaseModel):
     text: str
     language: str
-    # access_token:str
     class Config:
         extra = 'forbid'
 
@@ -61,7 +60,8 @@ class EncryptedLoginData(BaseModel):
     class Config:
         extra = 'forbid'
 
-
+class TextRequest(BaseModel):
+    emp_code: int
 
 class Base_Config(BaseModel):
     MONGODB_URI: str

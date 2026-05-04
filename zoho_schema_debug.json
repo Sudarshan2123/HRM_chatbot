@@ -1,0 +1,216 @@
+[
+  {
+    "name": "ZohoMail_getAllFolders",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path_variables": {
+          "properties": {
+            "accountId": {
+              "description": "The ID of the account where the folder will be listed.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "accountId"
+          ],
+          "type": "object"
+        },
+        "query_params": {
+          "properties": {
+            "fields": {
+              "default": "folderId,folderName",
+              "description": "Comma-separated list of fields to include in the response. Allowed values: folderId, folderName, folderType, path, previousFolderId, isArchived, imapAccess, URI. Default: fields=folderId,folderName",
+              "type": "string"
+            }
+          },
+          "required": [
+            "fields"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "query_params",
+        "path_variables"
+      ]
+    }
+  },
+  {
+    "name": "ZohoMail_listEmails",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path_variables": {
+          "properties": {
+            "accountId": {
+              "description": "This key is used to identify the account from which the folders have to be fetched. It is generated during account addition.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "accountId"
+          ],
+          "type": "object"
+        },
+        "query_params": {
+          "properties": {
+            "attachedMails": {
+              "default": false,
+              "description": "true to retrieve the emails with attachments, false to retrieve all emails.",
+              "type": "boolean"
+            },
+            "fields": {
+              "default": "subject,messageId,folderId,fromAddress,toAddress,receivedTime",
+              "description": "Comma-separated list of fields to include in the response. Allowed values: summary,sentDateInGMT,calendarType,subject,messageId,threadCount,flagid,status2,priority,hasInline,toAddress,folderId,ccAddress,threadId,hasAttachment,size,sender,receivedTime,fromAddress,status. Default: fields=subject,messageId,folderId,fromAddress,toAddress,receivedTime",
+              "type": "string"
+            },
+            "flaggedMails": {
+              "default": false,
+              "description": "true to retrieve flagged emails, false to retrieve all emails.",
+              "type": "boolean"
+            },
+            "flagid": {
+              "description": "Possible values: 0 - flag_not_set 1 - info 2 - important 3 - followup",
+              "format": "int32",
+              "type": "integer"
+            },
+            "folderId": {
+              "description": "The unique identifier for the folder from which the emails need to be retrieved. This can be fetched using the Get all folders API.",
+              "type": "string"
+            },
+            "includearchive": {
+              "default": false,
+              "description": "true to include archived emails, false to not include archived emails.",
+              "type": "boolean"
+            },
+            "includesent": {
+              "default": false,
+              "description": "true to include sent emails, false to not include sent emails.",
+              "type": "boolean"
+            },
+            "includeto": {
+              "default": false,
+              "description": "true to include to details, false to not include to details.",
+              "type": "boolean"
+            },
+            "inlinedMails": {
+              "default": false,
+              "description": "true to retrieve the emails with inline images, false to retrieve all emails.",
+              "type": "boolean"
+            },
+            "labelid": {
+              "description": "The unique identifier for the label used to retrieve emails based on a specific label.",
+              "type": "string"
+            },
+            "limit": {
+              "default": 10,
+              "description": "The number of emails to be retrieved from the start value mentioned. Allowed values:- Min. value:- 1 and max. value:- 200.",
+              "format": "int32",
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "respondedMails": {
+              "default": false,
+              "description": "true to retrieve emails with replies, false to retrieve all emails.",
+              "type": "boolean"
+            },
+            "sortBy": {
+              "default": "date",
+              "description": "The basis on which the sorting of the list of emails should be done.",
+              "enum": [
+                "date",
+                "messageId",
+                "size"
+              ],
+              "type": "string"
+            },
+            "sortorder": {
+              "default": false,
+              "description": "true for ascending order, false for descending order",
+              "type": "boolean"
+            },
+            "start": {
+              "default": 1,
+              "description": "The starting sequence number of the emails to be retrieved.",
+              "format": "int32",
+              "type": "integer"
+            },
+            "status": {
+              "default": "all",
+              "description": "Retrieve emails by read or unread status.",
+              "enum": [
+                "read",
+                "unread",
+                "all"
+              ],
+              "type": "string"
+            },
+            "threadId": {
+              "description": "The unique identifier for the flag used to retrieve emails of the given threadId.",
+              "type": "string"
+            },
+            "threadedMails": {
+              "default": false,
+              "description": "true to retrieve threaded emails, false to retrieve all emails.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "fields"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "query_params",
+        "path_variables"
+      ]
+    }
+  },
+  {
+    "name": "ZohoMail_getMessageContent",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path_variables": {
+          "properties": {
+            "accountId": {
+              "description": "This key is used to identify the account from which the folders have to be fetched. It is generated during account addition.",
+              "type": "string"
+            },
+            "folderId": {
+              "description": "This key is used to identify the folder to be used.",
+              "type": "string"
+            },
+            "messageId": {
+              "description": "This key is used to identify the message to be used.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "accountId",
+            "folderId",
+            "messageId"
+          ],
+          "type": "object"
+        },
+        "query_params": {
+          "properties": {
+            "includeBlockContent": {
+              "default": false,
+              "description": "This parameter specifies whether to include the block quote content in an email along with the email content.",
+              "type": "boolean"
+            }
+          },
+          "required": [],
+          "type": "object"
+        }
+      },
+      "required": [
+        "path_variables"
+      ]
+    }
+  }
+]

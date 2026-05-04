@@ -24,6 +24,7 @@ class State(TypedDict):
     tools:           Optional[str]
     zoho_account_id: Optional[str] 
     zoho_from_address: Optional[str]
+    pending_email:   Optional[dict]  # stores draft {to, subject, content} awaiting confirmation
 
 
 

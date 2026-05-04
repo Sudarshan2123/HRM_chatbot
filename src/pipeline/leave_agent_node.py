@@ -398,7 +398,7 @@ def submit_leave_application(state: LeaveState) -> dict:
         }
 
         if random.random() < 0.20:
-            feedback_url = "https://forms.google.com/your-form-link"
+            feedback_url = "https://docs.google.com/forms/d/e/1FAIpQLSdbAipY_JI26rgL2pTUgcPlgl0lAVWDdY_z0fboHtMBf9cEKQ/viewform?usp=publish-editor"
             output["feedback_url"] = feedback_url
             output["response"] += "\n\nWe value your feedback!"
             # Update the last message to include the feedback text
