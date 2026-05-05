@@ -133,7 +133,7 @@ async def chat(req: ChatRequest,token_payload: dict = Depends(verify_token)):
     # Generate thread_id if not provided (new chat)
     is_new_thread = not req.thread_id
     thread_id = req.thread_id or str(uuid.uuid4())
-    config    = {"configurable": {"thread_id": thread_id}}
+    config    = {"configurable": {"thread_id": thread_id},"recursion_limit": 5}
 
     # Always save/touch the thread BEFORE invoking so it exists in DB immediately
     await save_user_thread(req.emp_code, thread_id)
@@ -166,7 +166,7 @@ async def chat(req: ChatRequest,token_payload: dict = Depends(verify_token)):
 
 @app.post("/chat/resume", response_model=ChatResponse)
 async def resume(req: ResumeRequest,token_payload: dict = Depends(verify_token)):
-    config = {"configurable": {"thread_id": req.thread_id}}
+    config = {"configurable": {"thread_id": req.thread_id},"recursion_limit": 5}
 
     await update_thread_active(req.thread_id)
     print(f"[RESUME] decision='{req.decision}' → sending='{req.decision.strip().lower()}'")
@@ -205,7 +205,7 @@ async def chat_stream(req: ChatRequest, token_payload: dict = Depends(verify_tok
     assert_token_matches_emp(token_payload, req.emp_code)
 
     thread_id = req.thread_id or str(uuid.uuid4())
-    config    = {"configurable": {"thread_id": thread_id}}
+    config    = {"configurable": {"thread_id": thread_id},"recursion_limit": 5}
 
     thread_exists = await verify_thread_ownership(req.emp_code, thread_id)
     thread_in_db  = await execute_query_single(
