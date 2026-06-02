@@ -91,7 +91,8 @@ def time_it(func):
 
 def decrypt_credentials(encrypted_creds):
     """
-    Decrypt credentials that were encrypted using the JavaScript encryptCredentials function.
+    Decrypt credentials using Fernet only.
+    SECURITY: Legacy shift+base64 obfuscation is no longer accepted.
     
     Args:
         encrypted_creds (dict): Dictionary containing encrypted 'username' and 'password'
@@ -99,29 +100,37 @@ def decrypt_credentials(encrypted_creds):
     Returns:
         dict: Dictionary containing decrypted 'username' and 'password'
     """
-    shift = 5  # Same shift value used in JavaScript
-    
-    def decrypt_string(encrypted_str):
-        # First reverse the character shift
-        shifted_str = ''.join(
-            chr(ord(char) - shift) for char in encrypted_str
-        )
-        
-        # Then decode from base64
+    def _decrypt_string(cipher: Fernet, encrypted_val: str) -> str:
         try:
-            decoded_bytes = base64.b64decode(shifted_str)
-            return decoded_bytes.decode('utf-8')
-        except Exception as e:
-            raise ValueError(f"Failed to decrypt string: {str(e)}")
-    
+            return cipher.decrypt(encrypted_val.encode('utf-8')).decode('utf-8')
+        except Exception as exc:
+            raise ValueError(f"Failed to decrypt credential value: {exc}")
+
+    cipher_key = os.getenv("CIPHER_KEY")
+    if not cipher_key:
+        raise ValueError("CIPHER_KEY environment variable not set — cannot decrypt credentials.")
+
     try:
-        decrypted = {
-            'username': decrypt_string(encrypted_creds['username']),
-            'password': decrypt_string(encrypted_creds['password'])
-        }
-        return decrypted
-    except KeyError as e:
-        raise ValueError(f"Missing required credential field: {str(e)}")
+        cipher = Fernet(cipher_key.encode() if isinstance(cipher_key, str) else cipher_key)
+    except Exception as e:
+        raise ValueError(f"Invalid CIPHER_KEY format: {str(e)}")
+
+    decrypted = {}
+    for field in ['username', 'password']:
+        if field not in encrypted_creds:
+            raise ValueError(f"Missing required credential field: {field}")
+
+        encrypted_val = encrypted_creds[field]
+        if not isinstance(encrypted_val, str):
+            raise ValueError(f"Encrypted {field} must be a string.")
+
+        try:
+            decrypted[field] = _decrypt_string(cipher, encrypted_val)
+        except ValueError as exc:
+            logging.error("Failed to decrypt %s: %s", field, exc)
+            raise ValueError(f"Failed to decrypt {field}: {exc}")
+
+    return decrypted
     
 
 

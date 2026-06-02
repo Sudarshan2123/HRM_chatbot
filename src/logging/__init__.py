@@ -20,3 +20,4 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger("ChatbotLogger")
+logger.setLevel(logging.INFO)

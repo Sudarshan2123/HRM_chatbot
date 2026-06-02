@@ -23,6 +23,6 @@ def get_rails() -> LLMRails:
     )
     logger.info("Guardrails loaded successfully")
     
-    guardrails = LLMRails(config=config,verbose= True)  # ← LLMRails, not RunnableRails
+    guardrails = LLMRails(config=config,verbose= False)  # ← LLMRails, not RunnableRails
     logger.info("Guardrails loaded successfully")
     return guardrails

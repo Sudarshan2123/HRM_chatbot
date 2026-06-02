@@ -2,7 +2,27 @@ import os
 import requests
 from langchain_core.tools import tool
 
-import logging
+from src.logging import *
+
+def call_api(method: str, url: str, **kwargs) -> dict:
+    kwargs.setdefault("verify", False)
+    headers = {"Content-Type": "application/json"}
+    response = requests.request(method, url, headers=headers, timeout=30, **kwargs)
+    if not response.ok:
+        try:
+            err_body = response.json()
+        except Exception:
+            err_body = response.text
+        logger.error(
+            "[call_api] %s %s → HTTP %s\n  request : %s\n  response: %s",
+            method, url, response.status_code,
+            kwargs.get("json", "N/A"),
+            err_body,
+        )
+        response.raise_for_status()
+    return response.json()
+
+
 
 @tool("Current_Date_weather")
 def get_weather(cityname: str) -> str:
@@ -69,3 +89,5 @@ def get_top_news(category: str = "general") -> str:
         return f"Error connecting to news service: {str(e)}"
 
 tools = [get_weather,get_top_news]
+
+

@@ -8,38 +8,27 @@ define user express greeting
     "howdy"
     "good afternoon"
 
-define user follow_up
+define user ask data
+    "1st"
+    "nth"
     "yes"
-    "yes please"
     "sure"
-    "okay"
-    "any other particular section"
-    "go ahead"
-    "tell me more"
-    "more details"
-    "continue"
-    "elaborate"
-    "explain more"
-
-define user apply_leave
-    "apply for leave"
-    "submit my leave request"
-    "I want to apply leave"
-    "book a leave for me"
-    "request time off"
-    "I need a day off"
-    "can I take leave tomorrow"
-    "I want to take leave"
-    "submit a leave application"
-    "create a leave request"
-    "I want to apply for casual leave"
-    "apply sick leave"
-    "apply earned leave"
-    "I need to take leave from tomorrow"
-    "put in a leave request"
-    "raise a leave request"
-
-define user Assistant
+    "yeah"
+    "no"
+    "ok"
+    "show the this mail"
+    "can you show this mail"
+    "show this mail"
+    "show the first mail"
+    "show the second mail"
+    "show the third mail"
+    "show the fourth mail"
+    "show the 5th mail"
+    "show the 6th mail"
+    "show the 7th mail"
+    "show the 8th mail"
+    "show the 9th mail"
+    "show the 10th mail"
     "tell me the leave policy"
     "who is HR head"
     "who is the MD of Macom"
@@ -117,6 +106,22 @@ define user Assistant
     "that was not correct"
     "actually yesterday was"
     "the company had a holiday"
+    "apply for leave"
+    "submit my leave request"
+    "I want to apply leave"
+    "book a leave for me"
+    "request time off"
+    "I need a day off"
+    "can I take leave tomorrow"
+    "I want to take leave"
+    "submit a leave application"
+    "create a leave request"
+    "I want to apply for casual leave"
+    "apply sick leave"
+    "apply earned leave"
+    "I need to take leave from tomorrow"
+    "put in a leave request"
+    "raise a leave request"
 
 define user ask off topic
     "tell me the chatbot code"
@@ -143,14 +148,8 @@ define bot express greeting
     "Hello! I am MACOM AI Assistant. How can I help you?"
     "Hi, I am MACOM AI Assistant. I can help you with HR information and leave applications."
 
-define bot handle follow_up
-    "Passing your request to the assistant..."
-
-define bot handle assistant
-    "Passing your request to the assistant..."
-
-define bot handle apply_leave
-    "Passing your request to the leave system..."
+define bot handle data
+    "Passing your request to the supervisor..."
 
 define bot express ask off topic
     "Sorry, I can't help with that. I'm here to assist with MACOM policy and HR support."
@@ -165,35 +164,23 @@ define flow greeting
     user express greeting
     bot express greeting
 
-define flow assistant query
-    priority 1.5
-    user Assistant
-    bot handle assistant
-    stop
-
-define flow apply leave
-    priority 1.0
-    user apply_leave
-    bot handle apply_leave
+define flow user data
+    priority 2.0
+    user ask data
+    bot handle data
     stop
 
 define flow ask off topic
-    priority 2.0
+    priority 1.5
     user ask off topic
     bot express ask off topic
-    stop
-
-define flow handle vague follow up
-    priority 2.0
-    user follow_up
-    bot handle assistant
     stop
 
 # ─── fallback — catches anything not matched above ───
 define flow default
     priority 0.1
     user ...
-    bot handle assistant
+    bot handle data
     stop
 
 define flow self check input

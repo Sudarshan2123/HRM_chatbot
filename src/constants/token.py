@@ -1,70 +1,122 @@
+import hashlib
+import hmac
+import uuid
+from fastapi import Request
+import pytz
+import jwt
+import logging
 
-import pytz,jwt
 from datetime import datetime, timedelta
 from typing import Optional
 from jwt.exceptions import ExpiredSignatureError, InvalidTokenError
 from src.ColdStart.singleton import Init
-import logging
+from src.logging import logger
+
+MAX_TOKEN_EXPIRY_MINUTES = 480  # 8-hour hard ceiling
+
 
 class Token:
     def __init__(self):
         self.config = Init()
-    
-    def create_access_token(self,data: dict, expires_delta: Optional[timedelta] = None):
-        to_encode = data.copy()
-        if expires_delta:
-            expire = datetime.now(pytz.utc) + expires_delta
-        else:
-            expire = datetime.now(pytz.utc) + timedelta(minutes=15)
-        to_encode.update({"exp": expire})
-        encoded_jwt = jwt.encode(to_encode, self.config.SECRET_KEY, algorithm=self.config.ALGORITHM)
-        return encoded_jwt
-    
-    def create_update_token(self,data:dict):
-            logging.info("Entering access token validation method ")
-            User_name = data["userName"]
-            session_id = data["session_id"]
-            access_token_expires = timedelta(minutes=self.config.ACCESS_TOKEN_EXPIRE_MINUTES)
-            access_token = self.create_access_token(data={"userName": User_name,"session_id":session_id}, expires_delta=access_token_expires)
-            return access_token
 
-    def get_user_name_from_access_token(self,access_token):
-            decoded_jwt = jwt.decode(access_token, self.config.SECRET_KEY, algorithms=[self.config.ALGORITHM])
-            userName = decoded_jwt.get('userName')  # Adjust according to your token payload
-            return userName  
-    
-    
-    def validate_access_token(self,token: str) -> Optional[dict]:
+    # ── Token Creation ────────────────────────────────────────────────────────
+
+    def create_access_token(
+        self,
+        data: dict,
+        expires_delta: Optional[timedelta] = None,
+    ) -> str:
+        requested_minutes = (
+            expires_delta.total_seconds() / 60
+            if expires_delta else 15
+        )
+        safe_minutes = min(requested_minutes, MAX_TOKEN_EXPIRY_MINUTES)
+        now    = datetime.now(pytz.utc)
+        expire = now + timedelta(minutes=safe_minutes)
+
+        to_encode = data.copy()
+        to_encode.update({
+            "exp": expire,
+            "iat": now,
+            "jti": str(uuid.uuid4()),   # unique per token
+            "iss": "macom-hrms",
+        })
+        return jwt.encode(
+            to_encode,
+            self.config.SECRET_KEY,
+            algorithm=self.config.ALGORITHM,
+        )
+
+    def create_update_token(self, data: dict) -> str:
+        expires = timedelta(minutes=self.config.ACCESS_TOKEN_EXPIRE_MINUTES)
+        return self.create_access_token(
+            data={
+                "userName":   data["userName"],
+                "session_id": data["session_id"],
+            },
+            expires_delta=expires,
+        )
+
+    # ── Token Validation ──────────────────────────────────────────────────────
+
+    def validate_access_token(self, token: str) -> Optional[dict]:
         try:
-            logging.info("Entering access token validation method ")
-         
-            decoded_jwt = jwt.decode(token, self.config.SECRET_KEY, algorithms=[self.config.ALGORITHM])
-            userName = decoded_jwt.get('userName')  # Adjust according to your token payload        
-            if not userName:
-                logging.error("Token is invalid does not contain required fields")
+            decoded = jwt.decode(
+                token,
+                self.config.SECRET_KEY,
+                algorithms=[self.config.ALGORITHM],
+                issuer="macom-hrms",
+            )
+
+            if not decoded.get("userName"):
+                logger.warning("[Token] Missing userName claim.")
                 return None
- 
-            if userName:
-                return decoded_jwt
-            else:
-                logging.error("Token is invalid does not match requeird token")
+
+            if not decoded.get("session_id"):
+                logger.warning("[Token] Missing session_id claim.")
                 return None
+
+            return decoded
+
         except ExpiredSignatureError:
-            logging.error("Token has expired.")
+            logger.warning("[Token] Token expired.")
             return None
-        except InvalidTokenError:
-            logging.error("Invalid token.")
+        except InvalidTokenError as e:
+            logger.warning(f"[Token] Invalid token: {e}")
             return None
         except Exception as e:
-             logging.error(f"An unexpected error occurred during token validation:{e}")
-             return None
-            
-    
-    def data_update(self, users_collection, employee_code, access_token, session_id):
-        users_collection.update_one(
-            {"employee_code": employee_code},  # Filter criteria
-            {"$set": {"token": access_token, "session_id": session_id}}  # Fields to update
-        )
-    
+            logger.error(f"[Token] Unexpected validation error: {e}")
+            return None
 
+    def get_user_name_from_access_token(self, access_token: str) -> Optional[str]:
+        try:
+            decoded = jwt.decode(
+                access_token,
+                self.config.SECRET_KEY,
+                algorithms=[self.config.ALGORITHM],
+            )
+            return decoded.get("userName")
+        except (ExpiredSignatureError, InvalidTokenError) as e:
+            logger.warning(f"[Token] Decode failed: {e}")
+            return None
 
+    # ── Hash Helper ───────────────────────────────────────────────────────────
+
+    @staticmethod
+    def hash_token(token: str) -> str:
+        """SHA-256 hash of raw token — store this, never the raw token."""
+        return hashlib.sha256(token.encode()).hexdigest()
+    
+    def get_emp_code_from_request(self,  request: Request) -> str:
+        """Extract emp_code from Bearer token for rate limiting."""
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            try:
+                decoded = self.validate_access_token(auth.split(" ", 1)[1])
+                if decoded and decoded.get("emp_code"):
+                    return str(decoded["emp_code"])
+            except Exception:
+                pass
+        # fallback to real client IP (handles load balancer correctly)
+        forwarded = request.headers.get("X-Forwarded-For")
+        return forwarded.split(",")[0].strip() if forwarded else (request.client.host or "unknown")

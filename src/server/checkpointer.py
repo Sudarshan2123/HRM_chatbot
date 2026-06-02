@@ -21,6 +21,14 @@ async def init_checkpointer() -> AsyncPostgresSaver:
         min_size=2,
         max_size=10,
         max_idle=300,
+        max_lifetime    = 3600,
+        kwargs          = {
+            "connect_timeout":        10,
+            "keepalives":             1,
+            "keepalives_idle":        30,   # send keepalive after 30s idle
+            "keepalives_interval":    10,   # retry every 10s
+            "keepalives_count":       5,    # give up after 5 failed keepalives
+        }, 
         reconnect_timeout=30,
         timeout=10,
         open=False

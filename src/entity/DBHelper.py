@@ -12,7 +12,7 @@ async def save_user_thread(emp_code: int, thread_id: str):
             SET last_active = NOW()
         """,
         (emp_code, thread_id),
-        fetch=False
+        fetch=False,
     )
 
 
@@ -24,7 +24,7 @@ async def update_thread_active(thread_id: str):
         WHERE thread_id = %s
         """,
         (thread_id,),
-        fetch=False
+        fetch=False,
     )
 
 
@@ -34,6 +34,7 @@ async def verify_thread_ownership(emp_code: int, thread_id: str) -> bool:
         SELECT thread_id FROM user_conversations
         WHERE emp_code = %s AND thread_id = %s
         """,
-        (emp_code, thread_id)
+        (emp_code, thread_id),
     )
     return result is not None
+

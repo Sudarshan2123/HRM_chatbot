@@ -73,7 +73,7 @@ async def _do_call_tool(url: str, name: str, arguments: dict) -> str:
 # ── Schema fetch + cache ───────────────────────────────────────────────────
 
 async def _fetch_schemas(emp_code: int, url: str) -> list[dict]:
-    logger.info("[zoho:%s] Fetching schemas from %s", emp_code, url)
+    logger.info("[zoho:%s] Fetching schemas from MCP endpoint", emp_code)  # SECURITY: Don't log URL
     try:
         tools = await _do_list_tools(url)
         schemas = [
@@ -86,15 +86,15 @@ async def _fetch_schemas(emp_code: int, url: str) -> list[dict]:
         ]
         for s in schemas:
             if s["name"] == "ZohoMail_sendEmail":
-                logger.debug("[MCP_SCHEMA] ZohoMail_sendEmail inputSchema=%s", json.dumps(s['inputSchema']))
-        logger.info("[zoho:%s] Got %d schemas: %s", emp_code, len(schemas), [s["name"] for s in schemas])
+                logger.debug("[MCP_SCHEMA] ZohoMail_sendEmail schema loaded")  # SECURITY: Redacted details
+        logger.info("[zoho:%s] Got %d schemas", emp_code, len(schemas))
         return schemas
     except BaseException as exc:
         if hasattr(exc, 'exceptions'):
             for i, sub in enumerate(exc.exceptions):
-                logger.error("[zoho:%s] Sub-exception #%d: [%s] %s", emp_code, i, type(sub).__name__, sub)
+                logger.error("[zoho:%s] Sub-exception #%d: [%s]", emp_code, i, type(sub).__name__)
         else:
-            logger.error("[zoho:%s] Schema fetch failed: [%s] %s", emp_code, type(exc).__name__, exc)
+            logger.error("[zoho:%s] Schema fetch failed: [%s]", emp_code, type(exc).__name__)
         return []
 
 
@@ -129,12 +129,9 @@ class _ZohoTool(BaseTool):
         raise NotImplementedError("Use async")
 
     async def _arun(self, **kwargs: Any) -> str:
-        # Unwrap if LLM wraps args inside a 'kwargs' key
-        if list(kwargs.keys()) == ['kwargs'] and isinstance(kwargs['kwargs'], dict):
-            kwargs = kwargs['kwargs']
-        
         print(f"[ZOHO_ARUN] {self.name} kwargs={json.dumps(kwargs, default=str)[:200]}")
         try:
+            # Pass kwargs as-is — MCP expects the nested structure
             response = await _do_call_tool(self.zoho_url, self.name, kwargs)
             print(f"[ZOHO_ARUN] {self.name} response={str(response)[:200]}")
             return response
@@ -145,31 +142,16 @@ class _ZohoTool(BaseTool):
 
     async def ainvoke(self, input: Any, config: Any = None, **kwargs: Any) -> ToolMessage:
         if isinstance(input, dict):
-            args = input.get("args", {})
-            if not isinstance(args, dict):
-                args = {}
+            args         = input.get("args", {}) or {}
             tool_call_id = input.get("id", "")
         else:
-            args = {}
+            args         = {}
             tool_call_id = ""
 
-        # Unwrap nested kwargs if present (dict or JSON string)
-        if list(args.keys()) == ['kwargs']:
-            inner = args['kwargs']
-            if isinstance(inner, str):
-                try:
-                    inner = json.loads(inner)
-                except Exception:
-                    pass
-            if isinstance(inner, dict):
-                args = inner
+        logger.info("[ZohoTool.ainvoke] %s args=%s", self.name, json.dumps(args, default=str)[:200])
 
-        # Pass args as-is to MCP — keep path_variables, query_params, body all nested
-        # MCP server expects the exact structure from the tool schema
-        flat = dict(args)  # shallow copy, no flattening
-
-        logger.info("[ZohoTool.ainvoke] %s flat=%s", self.name, json.dumps(flat, default=str)[:200])
-        result = await self._arun(**flat)
+        # Pass entire args dict as-is — DynamicToolNode already structured it correctly
+        result = await self._arun(**args)
         return ToolMessage(content=result, tool_call_id=tool_call_id, name=self.name)
 
 
@@ -191,8 +173,9 @@ def _schemas_to_tools(schemas: list[dict], url: str) -> list[BaseTool]:
 
 async def get_zoho_tools_for_user(emp_code: int) -> list[BaseTool]:
     url = await get_zoho_key(emp_code)
+    logger.debug("[zoho:%s] MCP URL retrieved from key store", emp_code)  # SECURITY: Don't log URL
     if not url:
-        logger.debug("[zoho:%s] No URL saved", emp_code)
+        logger.warning("[zoho:%s] No MCP URL configured", emp_code)
         return []
 
     url = url.strip().rstrip("/")
@@ -201,7 +184,7 @@ async def get_zoho_tools_for_user(emp_code: int) -> list[BaseTool]:
         return []
 
     tools = _schemas_to_tools(schemas, url)
-    logger.info("[zoho:%s] Returning %d tools: %s", emp_code, len(tools), [t.name for t in tools])
+    logger.info("[zoho:%s] Returning %d tools", emp_code, len(tools))  # SECURITY: Redacted tool names
     return tools
 
 

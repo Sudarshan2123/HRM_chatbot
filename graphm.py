@@ -1,723 +1,115 @@
-# import datetime
-# import json
-# import os
-# import uuid
-
-# from src.pipeline.leave_agent_node import leave_subgraph  
-# os.environ["FASTEMBED_CACHE_PATH"] = "C:/fastembed_models"
-# from dotenv import load_dotenv
-# from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-# from langgraph.graph import END, StateGraph, START
-# from langchain_core.language_models import BaseChatModel
-# from nemoguardrails.rails.llm.options import GenerationOptions
-# # from src.pipeline.leave_agent import run_leave_agent
-# from src.ColdStart.singleton import get_pipeline
-# from src.server.mcp_loader import get_mcp_tools
-# from src.server.zoho_session import get_zoho_tools_for_user
-# from src.pipeline.tools import tools as localTool
-# from src.logging import logger
-# from guardrails_check import get_rails
-# from langgraph.prebuilt import ToolNode, tools_condition
-# from statenode import State
-# load_dotenv()
-
-# guardrails = get_rails()
-
-# async def get_all_tools_for_user(emp_code: int = None) -> list:
-#     """
-#     Build the full tool list for one user:
-#       1. Shared MCP tools (internal server — same for everyone)
-#       2. Local tools (RAG, weather, news — same for everyone)
-#       3. Per-user Zoho tools (fetched via their saved hash — unique per user)
-
-#     Zoho tools override any shared tool with the same name.
-#     """
-#     # ── Shared tools (same for all users) ─────────────────────────────
-#     shared_tools = get_mcp_tools() + localTool
-
-#     if not emp_code:
-#         return shared_tools
-
-#     # ── Per-user Zoho tools ────────────────────────────────────────────
-#     try:
-#         user_zoho_tools = await get_zoho_tools_for_user(emp_code)
-#     except Exception as e:
-#         logger.error(f"[emp:{emp_code}] Failed to load Zoho tools: {e}")
-#         user_zoho_tools = []
-
-#     if not user_zoho_tools:
-#         return shared_tools
-
-#     # Zoho tools override any shared tool with the same name
-#     user_tool_names = {t.name for t in user_zoho_tools}
-#     filtered_shared = [t for t in shared_tools if t.name not in user_tool_names]
-
-#     all_tools = filtered_shared + user_zoho_tools
-#     logger.info(
-#         f"[emp:{emp_code}] Tools: {len(filtered_shared)} shared + "
-#         f"{len(user_zoho_tools)} Zoho = {len(all_tools)} total"
-#     )
-#     return all_tools
-
-
-# class DynamicToolNode:
-#     async def __call__(self, state: State) -> dict:
-#         emp_code = state.get("emp_code")
-#         tools    = await get_all_tools_for_user(emp_code)
-
-#         # ── Patch missing accountId in any Zoho mail tool calls ──
-#         zoho_account_id   = state.get("zoho_account_id")
-#         zoho_from_address = state.get("zoho_from_address")
-#         print(f"[TOOL_NODE] zoho_account_id={zoho_account_id} zoho_from_address={zoho_from_address}")
-#         if zoho_account_id:
-#             last_msg = state["messages"][-1] if state.get("messages") else None
-#             if last_msg and hasattr(last_msg, "tool_calls"):
-#                 patched = []
-#                 for tc in (last_msg.tool_calls or []):
-#                     name = tc.get("name", "")
-#                     if "Zoho" in name or "zoho" in name:
-#                         args = dict(tc.get("args", {}))
-#                         # Unwrap kwargs wrapper if LLM used it (dict or JSON string)
-#                         if list(args.keys()) == ["kwargs"]:
-#                             inner = args["kwargs"]
-#                             if isinstance(inner, str):
-#                                 try:
-#                                     inner = json.loads(inner)
-#                                 except Exception:
-#                                     pass
-#                             if isinstance(inner, dict):
-#                                 args = inner
-#                         print(f"[TOOL_NODE] raw tool_call name={name} args={json.dumps(args, default=str)[:300]}")
-
-#                         # Ensure path_variables has accountId
-#                         pv = dict(args.get("path_variables") or {})
-#                         pv["accountId"] = zoho_account_id
-#                         args["path_variables"] = pv
-#                         args.pop("accountId", None)
-
-#                         # Collect all body fields — from nested body OR flat top-level
-#                         body = dict(args.get("body") or {})
-#                         BODY_FIELDS = {"fromAddress","toAddress","subject","content",
-#                                        "mailFormat","ccAddress","bccAddress","encoding",
-#                                        "action","mode"}
-#                         # Promote any flat body fields into body dict
-#                         for f in BODY_FIELDS:
-#                             if f in args and f not in body:
-#                                 body[f] = args.pop(f)
-#                         # Ensure fromAddress is set
-#                         if not body.get("fromAddress") and zoho_from_address:
-#                             body["fromAddress"] = zoho_from_address
-#                         # Normalise toAddress
-#                         to = body.get("toAddress")
-#                         if isinstance(to, list):
-#                             body["toAddress"] = ",".join(str(x) for x in to)
-#                         elif isinstance(to, dict):
-#                             body["toAddress"] = to.get("address") or to.get("email") or str(to)
-#                         if not body.get("mailFormat") and name == "ZohoMail_sendEmail":
-#                             body["mailFormat"] = "html"
-#                         args["body"] = body
-#                         tc = {**tc, "args": args}
-#                     patched.append(tc)
-#                 if patched != list(last_msg.tool_calls):
-#                     from langchain_core.messages import AIMessage as _AI
-#                     fixed_msg = _AI(
-#                         content=last_msg.content,
-#                         tool_calls=patched,
-#                     )
-#                     state = {**state, "messages": state["messages"][:-1] + [fixed_msg]}
-#                     logger.info("[DynamicToolNode] patched tool_calls: %s", patched)
-
-#         node = ToolNode(tools)
-#         return await node.ainvoke(state)
-
-
-# async def Orchestrator(state: State) -> State:
-
-#     if not (state.get("messages") and isinstance(state["messages"][-1], HumanMessage)):
-#         return {
-#             "intent":    state.get("intent", "general"),
-#             "responded": False,
-#         }
-
-#     latest_user_msg = state["messages"][-1].content.strip()
-#     leave_step      = state.get("leave_step")
-#     active_intent   = state.get("active_intent", "general")
-
-#     active_leave_steps = {
-#         "awaiting_leave_type", "awaiting_dates",
-#         "awaiting_to_date", "awaiting_remarks", "awaiting_submission"
-#     }
-
-#     # ── Explicit leave trigger phrases ──
-#     EXPLICIT_LEAVE_TRIGGERS = [
-#         "apply leave", "apply for leave", "apply the leave",
-#         "i want to apply", "submit leave", "request leave",
-#         "book leave", "i need a day off", "need leave",
-#         "apply casual", "apply sick", "apply earned",
-#         "raise a leave", "put in leave", "request time off"
-#     ]
-
-#     EXPLICIT_MAIL_TRIGGERS = [
-#         "draft", "compose", "send mail", "send email",
-#         "write mail", "write email", "write a mail", "write an email",
-#         "send a mail", "send an email", "mail to", "email to",
-#         "shoot a mail", "shoot an email",
-#         "check mail", "check email", "show mail", "show email",
-#         "read mail", "read email", "recent mail", "recent email",
-#         "my inbox", "fetch mail", "fetch email",
-#         "reply to", "unread mail", "unread email",
-#     ]
-
-#     def is_explicit_leave(msg: str) -> bool:
-#         msg_lower = msg.lower().strip()
-#         return any(phrase in msg_lower for phrase in EXPLICIT_LEAVE_TRIGGERS)
-
-#     def is_explicit_mail(msg: str) -> bool:
-#         msg_lower = msg.lower().strip()
-#         return any(phrase in msg_lower for phrase in EXPLICIT_MAIL_TRIGGERS)
-
-#     # Case 1: Active interrupt — skip guardrail
-#     if leave_step in active_leave_steps:
-#         print(f">>> interrupt pending — skipping guardrail")
-#         return {"intent": "apply_leave", "responded": False}
-
-#     # Case 2: Explicit leave request — skip guardrail entirely
-#     if is_explicit_leave(latest_user_msg):
-#         print(f">>> explicit leave request detected — routing directly to leave_node")
-#         return {
-#             "intent":        "apply_leave",
-#             "active_intent": "apply_leave",
-#             "responded":     False,
-#         }
-
-#     # Case 2b: Explicit mail request — skip guardrail entirely
-#     if is_explicit_mail(latest_user_msg):
-#         print(f">>> explicit mail request detected — routing directly to assistant")
-#         return {
-#             "intent":        "Assistant",
-#             "active_intent": "Assistant",
-#             "responded":     False,
-#         }
-
-#     # Case 2c: Already in an assistant conversation — skip guardrail for follow-ups
-#     if active_intent == "Assistant":
-#         print(f">>> active_intent=Assistant — skipping guardrail for follow-up")
-#         return {
-#             "intent":        "Assistant",
-#             "active_intent": "Assistant",
-#             "responded":     False,
-#         }
-
-#     # Case 3: Run guardrail (embeddings only — fast)
-#     input_messages = [{"role": "user", "content": latest_user_msg}]
-#     print(f"Input to Guardrail: {input_messages}")
-
-#     res = await guardrails.generate_async(
-#         messages=input_messages,
-#         options=GenerationOptions(
-#             output_vars=True,
-#             log={
-#                 "activated_rails": False,
-#                 "llm_calls":       False,
-#                 "internal_events": True,
-#                 "colang_history":  False,
-#             },
-#             rails=["input", "dialog"],
-#         ),
-#     )
-
-#     intents = [
-#         e for e in (res.log.internal_events or [])
-#         if e.get("type") == "UserIntent"
-#     ]
-#     detected_intent = intents[-1].get("intent") if intents else None
-#     print(f"Detected intent: {detected_intent}")
-
-#     output_text = res.response[-1].get("content", "") if res.response else ""
-
-#     PASSTHROUGH_MESSAGES = {
-#         "Passing your request to the assistant...",
-#         "Passing your request to the leave system..."
-#     }
-
-#     # Case 4: Guardrail blocked
-#     # Bypass if: mid-assistant-conversation OR guardrail detected Assistant intent
-#     if output_text and output_text not in PASSTHROUGH_MESSAGES:
-#         print(f">>> Case 4 fired: output_text='{output_text}' detected_intent={detected_intent} active_intent={active_intent}")
-#         if active_intent == "Assistant" or detected_intent == "Assistant":
-#             print(">>> guardrail blocked but intent=Assistant — continuing to assistant")
-#             return {
-#                 "intent":        "Assistant",
-#                 "active_intent": "Assistant",
-#                 "responded":     False,
-#             }
-#         print(f">>> BLOCKING with: {output_text}")
-#         return {
-#             "messages":  [AIMessage(content=output_text)],
-#             "intent":    detected_intent or active_intent,
-#             "responded": True,
-#         }
-
-#     # Case 5: apply_leave detected but mid-assistant-conversation
-#     # Only override if NOT an explicit leave request (already handled in Case 2)
-#     if detected_intent == "apply_leave" and active_intent == "Assistant":
-#         print(">>> non-explicit apply_leave during assistant conversation — staying in assistant")
-#         return {
-#             "intent":        "Assistant",
-#             "active_intent": "Assistant",
-#             "responded":     False,
-#         }
-
-#     # Case 6: Resolve final intent
-#     VAGUE_INTENTS = {"follow_up", "ask off topic", None}
-
-#     if leave_step in {"cancelled", "completed", "failed"}:
-#         previous_active_intent = "general"
-#     else:
-#         previous_active_intent = active_intent
-
-#     if detected_intent not in VAGUE_INTENTS:
-#         final_intent      = detected_intent
-#         new_active_intent = detected_intent
-#     else:
-#         final_intent      = previous_active_intent
-#         new_active_intent = previous_active_intent
-
-#     print(f"Final intent: {final_intent} | active_intent: {new_active_intent}")
-
-#     return {
-#         "intent":        final_intent,
-#         "active_intent": new_active_intent,
-#         "responded":     False,
-#     }
-
-
-# def route_after_classification(state: State) -> str:
-#     print(f">>> routing: responded={state.get('responded')}, intent={state.get('intent')}")
-
-#     if state.get("responded", False):
-#         return END
-
-#     leave_step = state.get("leave_step")
-
-#     active_leave_steps = {
-#         "awaiting_leave_type",
-#         "awaiting_dates",
-#         "awaiting_to_date",
-#         "awaiting_remarks",
-#         "awaiting_submission"
-#     }
-
-
-#     if leave_step in active_leave_steps:
-#         return "Leave_Application"
-
-#     if leave_step in {"cancelled", "completed", "failed", None}:
-#         intent = state.get("intent", "general")
-#         if intent == "apply_leave":
-#             return "Leave_Application"   # fresh start — enters leave_balance_node
-#         if intent == "Assistant":
-#             return "assistant"
-#         return "assistant"
-
-#     return "assistant"
-
-# def _smart_history(messages: list) -> list:
-#     """
-#     Return a window of messages that always includes:
-#     - The last HumanMessage and everything after it (tool calls + tool results)
-#     - Up to 4 previous messages for context
-#     Never cuts off mid tool-call/result cycle.
-#     """
-#     # Find the index of the last HumanMessage
-#     last_human_idx = None
-#     for i in range(len(messages) - 1, -1, -1):
-#         if isinstance(messages[i], HumanMessage):
-#             last_human_idx = i
-#             break
-
-#     if last_human_idx is None:
-#         return messages[-6:]
-
-#     # Take 4 messages before the last human turn for context, plus everything from it onward
-#     start = max(0, last_human_idx - 4)
-#     return messages[start:]
-
-
-# def _name_from_email(email: str) -> str:
-#     try:
-#         local = email.split("@")[0]
-#         return " ".join(p.capitalize() for p in local.split("."))
-#     except Exception:
-#         return email
-
-
-# def _extract_draft_from_messages(messages: list) -> dict | None:
-#     """Find the most recent AI draft message and extract to/subject/content."""
-#     import re
-#     for msg in reversed(messages):
-#         if not isinstance(msg, AIMessage):
-#             continue
-#         content = msg.content if isinstance(msg.content, str) else ""
-#         if "shall i send" not in content.lower():
-#             continue
-#         to      = re.search(r"To:\s*([\w.@+\-]+)", content)
-#         subject = re.search(r"Subject:\s*(.+)", content)
-#         body_match = re.search(r"(?:Dear|Hi|Hello).+?(?=Shall I send)", content, re.DOTALL | re.IGNORECASE)
-#         return {
-#             "toAddress": to.group(1).strip() if to else "",
-#             "subject":   subject.group(1).strip() if subject else "(no subject)",
-#             "content":   body_match.group(0).strip() if body_match else content,
-#         }
-#     return None
-
-
-# def _build_system_prompt(
-#     current_date: str,
-#     zoho_account_id: str = None,
-#     zoho_from_address: str = None,
-#     zoho_sender_name: str = None,
-# ) -> str:
-#     zoho_session = (
-#         f"ZOHO SESSION (already authenticated):\n"
-#         f"  accountId   = '{zoho_account_id}'\n"
-#         f"  fromAddress = '{zoho_from_address}'\n"
-#         f"  senderName  = '{zoho_sender_name}'\n"
-#         f"Use these directly. Do NOT call ZohoMail_getMailAccounts.\n"
-#         f"Always sign emails as '{zoho_sender_name}'.\n"
-#     ) if zoho_account_id else (
-#         "ZOHO MAIL: Call ZohoMail_getMailAccounts FIRST to get accountId and fromAddress "
-#         "before any mail operation. Never guess or hardcode these values.\n"
-#     )
-#     return (
-#         f"You are MACOM AI, an HR Assistant for MACOM employees.\n"
-#         f"TODAY'S DATE IS {current_date}. Use this directly — never ask the user for the date.\n\n"
-#         f"{zoho_session}\n"
-#         "CAPABILITIES — use the right tool for each task:\n"
-#         "- HR/Policy questions → call Policy_RAG_Implementation\n"
-#         "- Weather → call Current_Date_weather with city name\n"
-#         "- News → call Get_Top_News with category\n"
-#         "- Email (read/send/reply) → use Zoho tools per rules below\n\n"
-#         "EMAIL RULES:\n"
-#         "- NEVER ask the user for accountId, folderId, messageId or any technical ID — fetch them via tools\n"
-#         "- NEVER ask the user for subject or content if they already described the email — infer and draft it\n"
-#         "- folderId: always call ZohoMail_getAllFolders to get it, never use folder name as ID\n"
-#         "- folderId goes in query_params, never in path_variables\n"
-#         "- sortorder: boolean false, not string\n"
-#         "- SENDING: always show a full draft preview first and ask 'Shall I send this? (Yes/No)' — "
-#         "NEVER call ZohoMail_sendEmail before user confirms Yes\n"
-#         "- REPLYING: same — show draft, wait for Yes, then send\n"
-#     )
-
-# def _extract_zoho_account(messages: list) -> tuple:
-#     """Scan ToolMessage history for a prior ZohoMail_getMailAccounts result."""
-#     from langchain_core.messages import ToolMessage
-#     for msg in reversed(messages):
-#         if not isinstance(msg, ToolMessage) or msg.name != "ZohoMail_getMailAccounts":
-#             continue
-#         try:
-#             data     = json.loads(msg.content) if isinstance(msg.content, str) else msg.content
-#             accounts = (data.get("data", []) if isinstance(data, dict) else [])
-#             if accounts:
-#                 acct         = accounts[0]
-#                 account_id   = str(acct.get("accountId", ""))
-#                 # fromAddress can live at top-level OR inside sendMailDetails
-#                 from_address = (
-#                     acct.get("fromAddress")
-#                     or acct.get("mailboxAddress")
-#                     or (acct.get("sendMailDetails") or [{}])[0].get("fromAddress", "")
-#                 )
-#                 sender_name  = acct.get("displayName", "") or _name_from_email(from_address)
-#                 return account_id, from_address, sender_name
-#         except Exception:
-#             pass
-#     return None, None, None
-
-
-# _FOLDER_ASK_PHRASES = [
-#     "folder id", "folderid", "which folder", "folder name",
-#     "inbox, sent", "inbox or sent", "e.g., inbox", "specify which folder",
-#     "please specify", "could you please specify",
-# ]
-
-# _FROM_ADDRESS_ERROR_PHRASES = [
-#     "given fromaddress not exists",
-#     "fromaddress not exists",
-#     "fromaddress is not recognized",
-#     "from address not exists",
-# ]
-
-# _FROM_ADDRESS_ERROR_MSG = (
-#     "Unable to send the email. Your Zoho sender address ({}) is not validated. "
-#     "Please go to Zoho Mail Settings → Send Mail → validate your email address, then try again."
-# )
-
-# def _is_asking_for_folder(response) -> bool:
-#     if getattr(response, "tool_calls", None):
-#         return False
-#     content = response.content if isinstance(response.content, str) else ""
-#     lower   = content.lower()
-#     return any(phrase in lower for phrase in _FOLDER_ASK_PHRASES)
-
-# def _has_from_address_error(response) -> bool:
-#     """Detect when the LLM is reporting a fromAddress error from a prior tool result."""
-#     if getattr(response, "tool_calls", None):
-#         return False
-#     content = response.content if isinstance(response.content, str) else ""
-#     lower   = content.lower()
-#     return any(phrase in lower for phrase in _FROM_ADDRESS_ERROR_PHRASES)
-
-
-# async def assistant_node(state: State) -> dict:
-#     """LLM node that binds tools and generates a response."""
-#     pipeline     = get_pipeline()
-#     emp_code     = state.get("emp_code")
-#     all_tools    = await get_all_tools_for_user(emp_code)
-#     llm          = pipeline.vertex_llm.bind_tools(all_tools)
-#     current_date = datetime.datetime.now().strftime("%A, %d %B %Y")
-#     zoho_names   = [t.name for t in all_tools if "Zoho" in t.name or "zoho" in t.name]
-#     print(f"[ASSISTANT] emp={emp_code} zoho_tools={zoho_names}")
-
-#     zoho_account_id   = state.get("zoho_account_id")
-#     zoho_from_address = state.get("zoho_from_address")
-#     zoho_sender_name  = None
-
-#     if not zoho_account_id:
-#         zoho_account_id, zoho_from_address, zoho_sender_name = \
-#             _extract_zoho_account(state.get("messages", []))
-
-#     # Always fetch fresh from Zoho to get correct fromAddress
-#     zoho_tool = next((t for t in all_tools if t.name == "ZohoMail_getMailAccounts"), None)
-#     print(f"[ASSISTANT] zoho_tool_found={zoho_tool is not None} cached_account_id={zoho_account_id}")
-#     if zoho_tool:
-#         try:
-#             result = await zoho_tool.ainvoke({"args": {}, "id": "prefetch"})
-#             raw    = result.content if hasattr(result, "content") else result
-#             print(f"[ZOHO_FETCH] FULL raw={str(raw)[:2000]}")
-#             data   = json.loads(raw) if isinstance(raw, str) else raw
-#             accts  = data.get("data", []) if isinstance(data, dict) else []
-#             if accts:
-#                 acct              = accts[0]
-#                 zoho_account_id   = str(acct.get("accountId", ""))
-#                 zoho_from_address = (
-#                     acct.get("fromAddress")
-#                     or acct.get("mailboxAddress")
-#                     or (acct.get("sendMailDetails") or [{}])[0].get("fromAddress", "")
-#                 )
-#                 zoho_sender_name  = acct.get("displayName", "") or _name_from_email(zoho_from_address)
-#                 print(f"[ZOHO_FETCH] accountId={zoho_account_id} fromAddress={zoho_from_address}")
-#             else:
-#                 print(f"[ZOHO_FETCH] no accounts: {data}")
-#         except Exception as e:
-#             print(f"[ZOHO_FETCH] FAILED: {e}")
-
-#     if zoho_account_id and not zoho_sender_name:
-#         zoho_sender_name = _name_from_email(zoho_from_address or "")
-
-#     # ── No Zoho connection — tell user clearly instead of letting LLM hallucinate ──
-#     if not zoho_account_id:
-#         zoho_tool_exists = any(t.name == "ZohoMail_getMailAccounts" for t in all_tools)
-#         if not zoho_tool_exists:
-#             logger.warning("[assistant_node] No Zoho tools found for emp_code=%s", emp_code)
-#             # Only block if this is clearly a mail request
-#             last_human = next(
-#                 (m.content.lower() for m in reversed(state.get("messages", [])) if isinstance(m, HumanMessage)),
-#                 ""
-#             )
-#             MAIL_WORDS = ["mail", "email", "draft", "send", "inbox", "reply", "compose"]
-#             if any(w in last_human for w in MAIL_WORDS):
-#                 return {"messages": [AIMessage(
-#                     content="Your Zoho Mail account is not connected. Please ask your admin to configure the Zoho MCP key."
-#                 )]}
-
-#     history   = _smart_history(state["messages"])
-#     has_human = any(isinstance(m, HumanMessage) for m in history)
-#     if not has_human:
-#         return {"messages": [AIMessage(content="I'm here to help! What would you like to know?")]}
-
-#     # ── Intercept send confirmation — build tool call directly, no LLM ──
-#     last_human_msg = next(
-#         (m.content.strip().lower() for m in reversed(state["messages"]) if isinstance(m, HumanMessage)),
-#         ""
-#     )
-#     if last_human_msg in ("yes", "y", "send it", "send", "confirm") and zoho_account_id:
-#         draft = state.get("pending_email") or _extract_draft_from_messages(state["messages"])
-#         if draft and draft.get("toAddress"):
-#             print(f"[SEND_INTERCEPT] Building send call: to={draft['toAddress']} subject={draft['subject']}")
-#             return {
-#                 "messages": [AIMessage(
-#                     content="",
-#                     tool_calls=[{
-#                         "id":   str(uuid.uuid4()),
-#                         "name": "ZohoMail_sendEmail",
-#                         "args": {
-#                             "path_variables": {"accountId": zoho_account_id},
-#                             "fromAddress":    zoho_from_address,
-#                             "toAddress":      draft["toAddress"],
-#                             "subject":        draft["subject"],
-#                             "content":        draft["content"],
-#                             "mailFormat":     "html",
-#                         },
-#                     }],
-#                 )],
-#                 "pending_email": None,
-#             }
-
-#     system_content = _build_system_prompt(
-#         current_date,
-#         zoho_account_id=zoho_account_id,
-#         zoho_from_address=zoho_from_address,
-#         zoho_sender_name=zoho_sender_name,
-#     )
-
-#     logger.info("[assistant_node] system_prompt=\n%s", system_content)
-#     logger.info("[assistant_node] history_msgs=%s", [type(m).__name__ + ':' + str(m.content)[:60] for m in history])
-
-#     messages = [SystemMessage(content=system_content)] + history
-#     response = await llm.ainvoke(messages)
-
-#     # ── Guard: LLM asked user for folder — force ZohoMail_getAllFolders (read only) ──
-#     if _is_asking_for_folder(response) and zoho_account_id:
-#         last_human = next(
-#             (m.content.lower() for m in reversed(state.get("messages", [])) if isinstance(m, HumanMessage)),
-#             ""
-#         )
-#         SEND_WORDS = ["send", "draft", "compose", "write", "mail to", "email to"]
-#         is_send_request = any(w in last_human for w in SEND_WORDS)
-#         if not is_send_request:
-#             logger.warning("[assistant_node] LLM asked user for folder — forcing ZohoMail_getAllFolders call")
-#             return {"messages": [AIMessage(
-#                 content="",
-#                 tool_calls=[{
-#                     "id":   str(uuid.uuid4()),
-#                     "name": "ZohoMail_getAllFolders",
-#                     "args": {
-#                         "path_variables": {"accountId": zoho_account_id},
-#                         "query_params":   {"fields": "folderId,folderName"},
-#                     },
-#                 }],
-#             )]}
-
-#     # ── Guard: fromAddress error — show clear actionable message, stop retrying ──
-#     if _has_from_address_error(response):
-#         return {"messages": [AIMessage(
-#             content=_FROM_ADDRESS_ERROR_MSG.format(zoho_from_address or "unknown")
-#         )]}
-
-#     logger.info(
-#         "[assistant_node] tool_calls=%s content=%s",
-#         getattr(response, "tool_calls", None),
-#         str(response.content)[:300],
-#     )
-
-#     # ── Persist zoho credentials + store draft if LLM just showed a preview ──
-#     out: dict = {"messages": [response]}
-#     if zoho_account_id:
-#         out["zoho_account_id"]   = zoho_account_id
-#         out["zoho_from_address"] = zoho_from_address
-#     # If LLM just showed a draft preview, extract and store it
-#     resp_content = response.content if isinstance(response.content, str) else ""
-#     if "shall i send" in resp_content.lower() and not getattr(response, "tool_calls", None):
-#         draft = _extract_draft_from_messages(state["messages"] + [response])
-#         if draft:
-#             out["pending_email"] = draft
-#             print(f"[DRAFT_STORED] to={draft.get('toAddress')} subject={draft.get('subject')}")
-#     return out
-
-
-# def create_intent_driven_agent(checkpointer=None) -> StateGraph:
-#     """Create a LangGraph agent with NeMo Guardrails integration.
-
-#     Graph structure:
-#         START -> orchestrator -> route_after_classification
-#         -> assistant -> tools_condition -> tools -> assistant -> ...
-#     """
-
-#     _leave_subgraph_compiled = leave_subgraph(checkpointer=checkpointer)
-
-#     graph = StateGraph(State)
-
-#     # Add nodes
-#     graph.add_node("orchestrator", Orchestrator)
-#     graph.add_node("assistant", assistant_node)
-#     graph.add_node("leave_node", _leave_subgraph_compiled)
-#     graph.add_node("tools", DynamicToolNode())  # Use dynamic tool node
-
-#     # Entry point
-#     graph.add_edge(START, "orchestrator")
-
-
-#     # After orchestrator, route based on intent
-#     graph.add_conditional_edges(
-#         "orchestrator",
-#         route_after_classification,
-#         {
-#             "assistant": "assistant",
-#             "Leave_Application": "leave_node",
-#             END: END,
-#         },
-#     )
-
-#     # Tool call loop: assistant -> tools -> assistant
-#     graph.add_conditional_edges("assistant", tools_condition)
-#     graph.add_edge("tools", "assistant")
-
-#     return graph.compile(checkpointer=checkpointer)
-
-
-
 import datetime
 import json
 import os
 import uuid
-
-from src.pipeline.leave_agent_node import leave_subgraph
-os.environ["FASTEMBED_CACHE_PATH"] = "C:/fastembed_models"
-from dotenv import load_dotenv
+from langgraph.types import interrupt
+from langgraph.errors import GraphInterrupt
+from src.pipeline.leave_agent_node import LeaveToolNode, leave_agent, leave_agent_condition
+from src.pipeline.agent_registry import (
+    AGENT_REGISTRY,
+    get_supervisor_agent_block,
+    get_display_to_internal_map,
+    get_all_display_names,
+    keyword_route,
+)
+os.environ["FASTEMBED_CACHE_PATH"] = os.getenv("FASTEMBED_CACHE_PATH", "/tmp/fastembed")
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.graph import END, StateGraph, START
-from nemoguardrails.rails.llm.options import GenerationOptions
 from src.ColdStart.singleton import get_pipeline
 from src.server.mcp_loader import get_mcp_tools
 from src.server.zoho_session import get_zoho_tools_for_user
 from src.pipeline.tools import tools as localTool
 from src.logging import logger
 from guardrails_check import get_rails
-from langgraph.prebuilt import ToolNode, tools_condition
-from statenode import State
+from langgraph.prebuilt import ToolNode
+from statenode import *
 
-load_dotenv()
+# ── Constants ──────────────────────────────────────────────────────────────────
+_queue_supervisor = None
 
-guardrails = get_rails()
+TOOL_REGISTRY: dict[str, ToolMetadata] = {
+    # Zoho tools
+    "ZohoMail_getMailAccounts":   ToolMetadata(category="zoho",  agents=["mail_agent"]),
+    "ZohoMail_getAllFolders":     ToolMetadata(category="zoho",  agents=["mail_agent"]),
+    "ZohoMail_listEmails":        ToolMetadata(category="zoho",  agents=["mail_agent"]),
+    "ZohoMail_getMessageContent": ToolMetadata(category="zoho",  agents=["mail_agent"]),
+    "ZohoMail_sendEmail":         ToolMetadata(category="zoho",  agents=["mail_agent"]),
+    "ZohoMail_readMessages":      ToolMetadata(category="zoho",  agents=["mail_agent"]),
+    "ZohoMail_sendReplyEmail":    ToolMetadata(category="zoho",  agents=["mail_agent"]),
+    "ZohoMail_readFolder":        ToolMetadata(category="zoho",  agents=["mail_agent"]),
+    # HR tools
+    "Policy_RAG_Implementation":  ToolMetadata(category="hr",    agents=["hr_agent"]),
+    "Current_Date_weather":       ToolMetadata(category="hr",    agents=["hr_agent"]),
+    "Get_Top_News":               ToolMetadata(category="hr",    agents=["hr_agent"]),
+    # Leave tools
+    "leave_check_balance":        ToolMetadata(category="leave", agents=["leave_agent"]),
+    "leave_get_status":           ToolMetadata(category="leave", agents=["leave_agent"]),
+    "leave_get_categories":       ToolMetadata(category="leave", agents=["leave_agent"]),
+    "leave_calculate_days":       ToolMetadata(category="leave", agents=["leave_agent"]),
+    "leave_find_reasons":         ToolMetadata(category="leave", agents=["leave_agent"]),
+    "leave_apply":                ToolMetadata(category="leave", agents=["leave_agent"]),
+}
+
+_FALLBACK_TOOLS = {
+    "mail_agent":  lambda tool: "zoho"  in tool.name.lower(),
+    "hr_agent":    lambda tool: any(k in tool.name.lower() for k in ["rag", "policy", "weather", "news"]),
+    "leave_agent": lambda tool: "leave" in tool.name.lower(),
+}
+
+# ── Confirmation phrases per agent ─────────────────────────────────────────────
+# Used by agents to detect when they are asking the user a yes/no question,
+# so pending_agent can be set correctly.
+AGENT_CONFIRMATION_PHRASES: dict[str, list[str]] = {
+    "mail_agent": [
+        "shall i send this email",
+        "should i send this email",
+        "is the mail format correct",
+        "is the format in email correct",
+        "is the format correct",
+    ],
+    "hr_agent": [
+        "shall i proceed",
+        "do you want me to",
+        "would you like me to",
+        "should i look up",
+        "do you confirm",
+    ],
+    # leave_agent uses LangGraph interrupt() — no confirmation phrase detection needed
+}
+
+# ── Tool filtering ─────────────────────────────────────────────────────────────
+
+def _fallback_category(agent_name: str, tool) -> list:
+    matcher = _FALLBACK_TOOLS.get(agent_name)
+    if matcher and matcher(tool):
+        return [tool]
+    return []
+
+
+def get_tools_for_agent(agent_name: str, all_tools: list) -> list:
+    result = []
+    for tool in all_tools:
+        meta = TOOL_REGISTRY.get(tool.name)
+        if meta:
+            if agent_name in meta.agents:
+                result.append(tool)
+        else:
+            result.extend(_fallback_category(agent_name, tool))
+    return result
 
 
 async def get_all_tools_for_user(emp_code: int = None) -> list:
-    """
-    Build the full tool list for one user:
-      1. Shared MCP tools (internal server — same for everyone)
-      2. Local tools (RAG, weather, news — same for everyone)
-      3. Per-user Zoho tools (fetched via their saved hash — unique per user)
-
-    Zoho tools override any shared tool with the same name.
-    """
     shared_tools = get_mcp_tools() + localTool
-
-    if not emp_code:
-        return shared_tools
-
     try:
-        user_zoho_tools = await get_zoho_tools_for_user(emp_code)
+        user_zoho_tools = await get_zoho_tools_for_user(emp_code) if emp_code else []
     except Exception as e:
         logger.error(f"[emp:{emp_code}] Failed to load Zoho tools: {e}")
         user_zoho_tools = []
 
-    if not user_zoho_tools:
-        return shared_tools
-
     user_tool_names = {t.name for t in user_zoho_tools}
     filtered_shared = [t for t in shared_tools if t.name not in user_tool_names]
+    all_tools       = filtered_shared + user_zoho_tools
 
-    all_tools = filtered_shared + user_zoho_tools
     logger.info(
         f"[emp:{emp_code}] Tools: {len(filtered_shared)} shared + "
         f"{len(user_zoho_tools)} Zoho = {len(all_tools)} total"
@@ -725,671 +117,754 @@ async def get_all_tools_for_user(emp_code: int = None) -> list:
     return all_tools
 
 
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+def _is_confirmation_reply(text: str) -> bool:
+    """Return True if the user's message is a bare yes/no confirmation."""
+    return text.strip().lower().rstrip(".").rstrip("!") in {
+        "yes", "no", "y", "n", "confirm", "cancel", "ok", "okay", "sure", "nope"
+    }
+
+
+def _agent_is_asking_confirmation(text: str, agent_name: str) -> bool:
+    """Return True if the agent's response text contains a confirmation prompt."""
+    phrases = AGENT_CONFIRMATION_PHRASES.get(agent_name, [])
+    lower   = text.lower()
+    return any(p in lower for p in phrases)
+
+
+# ── DynamicToolNode ────────────────────────────────────────────────────────────
 class DynamicToolNode:
     async def __call__(self, state: State) -> dict:
-        emp_code = state.get("emp_code")
-        tools = await get_all_tools_for_user(emp_code)
+        emp_code  = state.get("emp_code")
+        all_tools = state.get("all_tools") or await get_all_tools_for_user(emp_code)
 
-        zoho_account_id = state.get("zoho_account_id")
-        zoho_from_address = state.get("zoho_from_address")
-        print(f"[TOOL_NODE] zoho_account_id={zoho_account_id} zoho_from_address={zoho_from_address}")
+        last_msg = state["messages"][-1] if state.get("messages") else None
+        if not last_msg or not hasattr(last_msg, "tool_calls"):
+            return await ToolNode(all_tools).ainvoke(state)
 
-        if zoho_account_id:
-            last_msg = state["messages"][-1] if state.get("messages") else None
-            if last_msg and hasattr(last_msg, "tool_calls"):
-                patched = []
-                for tc in (last_msg.tool_calls or []):
-                    name = tc.get("name", "")
-                    if "Zoho" in name or "zoho" in name:
-                        args = dict(tc.get("args", {}))
+        NO_ARG_TOOLS = {"ZohoMail_getMailAccounts"}
+        patched      = []
+        needs_patch  = False
 
-                        # FIX 1: Unwrap kwargs wrapper — handle both dict and JSON string
-                        if list(args.keys()) == ["kwargs"]:
-                            inner = args["kwargs"]
-                            if isinstance(inner, str):
+        for tc in (last_msg.tool_calls or []):
+            name = tc.get("name", "")
+            args = dict(tc.get("args", {}))
+
+            if "Zoho" in name and name not in NO_ARG_TOOLS:
+
+                if list(args.keys()) == ["kwargs"] and isinstance(args.get("kwargs"), dict):
+                    args = dict(args["kwargs"])
+                    logger.info(f"[DynamicToolNode] unwrapped kwargs for {name}")
+
+                pv   = dict(args.get("path_variables") or {})
+                qp   = dict(args.get("query_params")   or {})
+                body = dict(args.get("body")            or {})
+
+                if "accountId" in args:
+                    val = args.pop("accountId")
+                    if val and val != "unknown":
+                        pv["accountId"] = val
+                if pv.get("accountId", "unknown") in ("unknown", "", None):
+                    if state.get("zoho_account_id"):
+                        pv["accountId"] = state["zoho_account_id"]
+                        logger.info(f"[DynamicToolNode] injected accountId from state for {name}")
+                    else:
+                        logger.warning(f"[DynamicToolNode] accountId missing for {name}")
+
+                if "messageId" in args:
+                    pv["messageId"] = args.pop("messageId")
+
+                if "folderId" in args:
+                    if name == "ZohoMail_getMessageContent":
+                        pv["folderId"] = args.pop("folderId")
+                    else:
+                        qp["folderId"] = args.pop("folderId")
+
+                if name == "ZohoMail_getMessageContent" and "folderId" not in pv:
+                    folder_id = state.get("zoho_folder_id")
+                    if folder_id:
+                        pv["folderId"] = folder_id
+                    else:
+                        for msg in reversed(state.get("messages", [])):
+                            if isinstance(msg, ToolMessage) and msg.name == "ZohoMail_getAllFolders":
                                 try:
-                                    inner = json.loads(inner)
+                                    data    = json.loads(msg.content)
+                                    folders = data.get("data", [])
+                                    inbox   = next(
+                                        (f for f in folders if "inbox" in f.get("folderName", "").lower()),
+                                        folders[0] if folders else {}
+                                    )
+                                    if inbox.get("folderId"):
+                                        pv["folderId"] = inbox["folderId"]
                                 except Exception:
                                     pass
-                            if isinstance(inner, dict):
-                                args = inner
+                                break
 
-                        print(f"[TOOL_NODE] raw tool_call name={name} args={json.dumps(args, default=str)[:300]}")
+                if name == "ZohoMail_getAllFolders":
+                    qp["fields"] = "folderId,folderName"
+                elif name == "ZohoMail_listEmails":
+                    if "folderId" not in qp and state.get("zoho_folder_id"):
+                        qp["folderId"] = state["zoho_folder_id"]
+                    qp["fields"] = "messageId,subject,sender,receivedTime"
+                    if "sortOrder" in qp:
+                        qp["sortorder"] = qp.pop("sortOrder")
+                    so = qp.get("sortorder", False)
+                    if isinstance(so, str):
+                        qp["sortorder"] = so.lower() not in ("false", "0", "no", "off")
+                    elif isinstance(so, int):
+                        qp["sortorder"] = bool(so)
+                    else:
+                        qp["sortorder"] = False
 
-                        # Ensure path_variables has accountId
-                        pv = dict(args.get("path_variables") or {})
-                        pv["accountId"] = zoho_account_id
-                        args["path_variables"] = pv
-                        args.pop("accountId", None)
+                BODY_FIELDS = {"fromAddress", "toAddress", "subject", "content", "mailFormat", "ccAddress", "bccAddress"}
+                for f in BODY_FIELDS:
+                    if f in args:
+                        body[f] = args.pop(f)
 
-                        qp = dict(args.get("query_params") or {})
+                if name in ("ZohoMail_sendEmail", "ZohoMail_sendReplyEmail"):
+                    if body.get("fromAddress", "unknown") in ("unknown", "", None):
+                        if state.get("zoho_from_address"):
+                            body["fromAddress"] = state["zoho_from_address"]
 
-                        # Only ZohoMail_getMessageContent requires folderId as a path variable.
-                        # ZohoMail_listEmails keeps folderId in query_params.
-                        if name.strip().lower() == "zohomail_getmessagecontent" and "folderId" in qp:
-                            pv["folderId"] = qp.pop("folderId")
-                        elif "folderId" in qp and name.strip().lower() != "zohomail_getmessagecontent":
-                            logger.debug(
-                                "[DynamicToolNode] leaving folderId in query_params for %s",
-                                name
-                            )
+                args.clear()
+                if pv:   args["path_variables"] = pv
+                if qp:   args["query_params"]   = qp
+                if body: args["body"]            = body
 
-                        args["path_variables"] = pv
+                logger.info(f"[DynamicToolNode] {name} → {json.dumps(args, default=str)[:300]}")
+                tc          = {**tc, "args": args}
+                needs_patch = True
 
-                        # Remove accountId from query_params if present
-                        qp.pop("accountId", None)
-                        if qp:
-                            args["query_params"] = qp
-                        else:
-                            args.pop("query_params", None)
+            elif "Zoho" in name and name in NO_ARG_TOOLS:
+                tc          = {**tc, "args": {}}
+                needs_patch = True
+                logger.info(f"[DynamicToolNode] cleared args for no-arg tool {name}")
 
-                        # FIX 2: Collect all body fields correctly
-                        body = dict(args.get("body") or {})
-                        BODY_FIELDS = {
-                            "fromAddress", "toAddress", "subject", "content",
-                            "mailFormat", "ccAddress", "bccAddress", "encoding",
-                            "action", "mode"
-                        }
-                        # Promote flat body fields into body dict and remove from top-level
-                        for f in list(BODY_FIELDS):
-                            if f in args and f not in body:
-                                body[f] = args.pop(f)
+            patched.append(tc)
 
-                        # Ensure fromAddress is set
-                        if not body.get("fromAddress") and zoho_from_address:
-                            body["fromAddress"] = zoho_from_address
+        if needs_patch:
+            state = {
+                **state,
+                "messages": state["messages"][:-1] + [
+                    AIMessage(content=last_msg.content, tool_calls=patched)
+                ],
+            }
 
-                        # FIX 3: Normalise toAddress — handle list, dict, and plain string
-                        to = body.get("toAddress")
-                        if isinstance(to, list):
-                            body["toAddress"] = ",".join(str(x) for x in to)
-                        elif isinstance(to, dict):
-                            body["toAddress"] = (
-                                to.get("address") or to.get("email") or str(to)
-                            )
-                        # else: already a string, leave as-is
+        try:
+            result = await ToolNode(all_tools).ainvoke(state)
+        except GraphInterrupt:
+            raise
+        except Exception as e:
+            logger.error(f"[DynamicToolNode] Tool execution error: {e}")
+            return {"messages": [AIMessage(content=f"Tool execution failed: {e}")]}
 
-                        if not body.get("mailFormat") and name == "ZohoMail_sendEmail":
-                            body["mailFormat"] = "html"
+        for msg in reversed(result.get("messages", [])):
+            if not isinstance(msg, ToolMessage):
+                break
+            try:
+                data = json.loads(msg.content) if isinstance(msg.content, str) else msg.content
+                if not isinstance(data, dict):
+                    continue
+            except Exception:
+                continue
 
-                        if name == "ZohoMail_getAllFolders":
-                            qp = dict(args.get("query_params") or {})
-                            qp["fields"] = "folderId,folderName"
-                            args["query_params"] = qp
+            if msg.name == "ZohoMail_getMailAccounts":
+                acct = (data.get("data") or [{}])[0]
+                result["zoho_account_id"]   = str(acct.get("accountId", ""))
+                result["zoho_from_address"] = acct.get("fromAddress") or acct.get("mailboxAddress", "")
+                logger.info(f"[DynamicToolNode] cached zoho_account_id={result['zoho_account_id']}")
 
-                        if name == "ZohoMail_listEmails":
-                            qp = dict(args.get("query_params") or {})
-                            qp["fields"] = "messageId,subject,sender,receivedTime"
-                            # Normalize sortorder to a boolean for ZohoMail_listEmails.
-                            if "sortOrder" in qp:
-                                qp["sortorder"] = qp.pop("sortOrder")
-                            if "sortorder" in qp:
-                                value = qp["sortorder"]
-                                if isinstance(value, str):
-                                    normalized = value.strip().lower()
-                                    if normalized in {"false", "0", "no", "off"}:
-                                        qp["sortorder"] = False
-                                    elif normalized in {"true", "1", "yes", "on"}:
-                                        qp["sortorder"] = True
-                                elif isinstance(value, int):
-                                    qp["sortorder"] = bool(value)
-                            args["query_params"] = qp
+            elif msg.name == "ZohoMail_getAllFolders":
+                folders = data.get("data", [])
+                inbox   = next(
+                    (f for f in folders if "inbox" in f.get("folderName", "").lower()),
+                    folders[0] if folders else {}
+                )
+                result["zoho_folder_id"] = inbox.get("folderId")
+                logger.info(f"[DynamicToolNode] cached zoho_folder_id={result['zoho_folder_id']}")
 
-                        args["body"] = body
-                        tc = {**tc, "args": args}
-                    patched.append(tc)
-
-                # FIX 4: Compare correctly — tool_calls may be a list of dicts, not raw list
-                if patched != list(last_msg.tool_calls or []):
-                    fixed_msg = AIMessage(
-                        content=last_msg.content,
-                        tool_calls=patched,
-                    )
-                    state = {**state, "messages": state["messages"][:-1] + [fixed_msg]}
-                    logger.info("[DynamicToolNode] patched tool_calls: %s", patched)
-
-        node = ToolNode(tools)
-        return await node.ainvoke(state)
+        return result
 
 
-async def Orchestrator(state: State) -> State:
-    if not (state.get("messages") and isinstance(state["messages"][-1], HumanMessage)):
+# ── System prompts ─────────────────────────────────────────────────────────────
+
+def _build_supervisor_prompt() -> str:
+    agent_block = get_supervisor_agent_block()
+    valid_names = ", ".join(f'"{n}"' for n in get_all_display_names())
+
+    return f"""
+You are a supervisor for MACOM HR assistant.
+Your ONLY job is to decide which agents are needed for the user's request — in order.
+You do NOT answer the user. You do NOT explain. You only plan the agent queue.
+
+AGENTS:
+{agent_block}
+
+PLANNING RULES:
+  1. Most requests need exactly ONE agent — do not over-route
+  2. Never repeat the same agent in the queue
+  3. Order matters — put the most relevant agent first
+  4. If the request clearly involves only one domain → return only that agent
+  5. If unsure → ["hr_agent"]
+  6.Any query about leave status, leave history, or applied leaves → always route to leave_agent, never hr_agent.
+
+MULTI-AGENT (rare — only when request explicitly spans two domains):
+  - "check my leave balance AND send an email" → ["leave_agent", "mail_agent"]
+  - "what's the weather and read my emails"    → ["hr_agent", "mail_agent"]
+
+STOP — RETURN EMPTY OR FINISH IF ANY OF THESE ARE TRUE:
+  - The last AIMessage already contains the answer to the user's request
+  - The last AIMessage shows email content, a list of emails, or mail details
+  - The last AIMessage asks the user a follow-up question (e.g. "Shall I send?")
+  - The last AIMessage confirms a completed action
+  - A tool error occurred — do NOT retry the same agent
+  - The same agent was already called this turn
+
+  IF ANY ABOVE IS TRUE → return exactly: {{"agents": ["hr_agent"], "reason": "already answered"}}
+  Wait for the user's NEXT message before routing again.
+
+AGENT NAME RULES:
+  - Only use exact strings: {valid_names}
+  - Never invent new agent names
+  - Never return an empty list — always return at least one agent
+"""
+
+
+MAIL_AGENT_SYSTEM = """
+You are MACOM Mail Agent.
+
+STRICT EXECUTION ORDER — never skip, never guess:
+  Step 1: ZohoMail_getMailAccounts  
+          args: NONE — call with empty args {{}}
+          *** Handled automatically. SESSION will always have accountId.
+
+  Step 2: ZohoMail_getAllFolders     
+          args: accountId = SESSION.accountId
+          SKIP if SESSION.folderId is already known
+
+  Step 3: ZohoMail_listEmails        
+          args: accountId = SESSION.accountId, folderId = SESSION.folderId
+          ONLY call if user wants to read/reply emails
+
+  Step 4: ZohoMail_getMessageContent 
+          args: accountId = SESSION.accountId, messageId = from Step 3 result
+          ONLY call if user wants to read a specific email
+
+  Step 5: ZohoMail_sendEmail
+          args: accountId = SESSION.accountId, fromAddress = SESSION.fromAddress,
+                toAddress = <user provided>, subject = <user provided>, content = <drafted>
+          NEVER call without user confirmation
+
+  Step 6: ZohoMail_sendReplyEmail
+          args: accountId = SESSION.accountId, messageId = SESSION.messageId,
+                content = <drafted reply>
+          NEVER call without user confirmation
+
+SESSION:
+  accountId   : {zoho_account_id}
+  folderId    : {zoho_folder_id}
+  fromAddress : {zoho_from_address}
+  TODAY       : {current_date}
+
+ARG RULES:
+  - NEVER pass "unknown", null, or empty string as an arg value
+  - NEVER guess or fabricate any ID
+  - ONLY use values from SESSION or returned by a previous tool
+  - Always pass accountId in EVERY tool call that requires it
+
+DRAFT-BEFORE-SEND — MANDATORY:
+  1. Write the complete email draft with "Subject:", "To:", and full body
+  2. End with exactly: "Shall I send this email? (Yes / No)"
+  3. Do NOT call send tools in this turn
+  4. ONLY call send tool AFTER user confirms with Yes in the NEXT turn
+
+CONFIRMATION HANDLING:
+  - If the conversation shows a drafted email followed by user saying "Yes" or "Yes, please send":
+    → Immediately call ZohoMail_sendEmail (or ZohoMail_sendReplyEmail for replies)
+    → Use the exact draft content — do NOT rewrite or ask again
+    → Do NOT say "I cannot send emails" — you have the tools and confirmation to proceed
+  - If user says "No" → acknowledge and ask what they'd like to change
+  
+GENERAL RULES:
+  - One tool at a time, strict order above
+  - Never re-fetch what is already in SESSION
+  - Never call sendEmail or sendReplyEmail without explicit prior confirmation
+"""
+
+HR_AGENT_SYSTEM = """
+You are MACOM HR Agent, an assistant for MACOM employees.
+
+You help with:
+  - HR policy questions (leave policy, dress code, holidays, entitlements)
+  - Current date and weather information
+  - Latest news
+  - General HR queries
+
+TODAY: {current_date}
+
+TOOLS:
+  - Policy_RAG_Implementation : HR policy documents
+  - Current_Date_weather       : Date, time, weather
+  - Get_Top_News               : Latest news
+
+RULES:
+  - Use Policy_RAG_Implementation for ANY policy/HR procedure question
+  - Use Current_Date_weather for date/time/weather
+  - Use Get_Top_News for news
+  - Answer general knowledge directly without tools
+  - You do NOT handle email or leave tasks
+
+POLICY RESPONSE RULES (CRITICAL):
+  - ALWAYS call Policy_RAG_Implementation before answering any HR or policy question
+  - Answer ONLY based on what is explicitly found in the retrieved documents
+  - Do NOT infer, assume, or generate policy details from your own knowledge
+  - Never partially answer using your own knowledge when documents are insufficient
+  - Do not say "typically", "usually", or "in most companies" — only cite what MACOM documents state
+
+RETRY RULES:
+  - If Policy_RAG_Implementation returns empty or no relevant results:
+      → Call it ONE more time with a broader/rephrased query
+      → Only if the second attempt also returns nothing → respond with the sorry message
+  - NEVER show the sorry message after just one failed RAG call
+
+HISTORY RULES:
+  - NEVER repeat a previous response from history
+  - NEVER use a previous "sorry" or "not found" message as your answer
+  - If the last response in history was a sorry/not-found message for the same question:
+      → Ignore it completely
+      → Call Policy_RAG_Implementation fresh with a broader query
+  - Always make a fresh tool call — do NOT recycle old answers from history
+
+FINAL FALLBACK:
+  - Only after two failed RAG attempts, respond with:
+    "I'm sorry, I wasn't able to find information on that in our current HR policy documents.
+     For further assistance, please reach out to the HR team directly."
+"""
+
+
+# ── Supervisor ─────────────────────────────────────────────────────────────────
+
+def get_queue_supervisor():
+    """Singleton — built once, reused."""
+    global _queue_supervisor
+    if _queue_supervisor is None:
+        _queue_supervisor = (
+            get_pipeline().vertex_llm
+            .with_structured_output(SupervisorQueue)
+        )
+    return _queue_supervisor
+
+
+async def supervisor_node(state: State) -> dict:
+    # ── 1. Pop from existing queue first — no LLM needed ─────────────────────
+    queue = list(state.get("agent_queue") or [])
+    if queue:
+        next_agent = queue.pop(0)
+        logger.info(f"[supervisor] popping from queue: {next_agent}, remaining: {queue}")
         return {
-            "intent": state.get("intent", "general"),
-            "responded": False,
+            "next_agent":  next_agent,
+            "agent_queue": queue,
         }
 
-    latest_user_msg = state["messages"][-1].content.strip()
-    leave_step = state.get("leave_step")
-    active_intent = state.get("active_intent", "general")
+    # ── 2. Generic confirmation detection ─────────────────────────────────────
+    # Declare variables BEFORE using them
+    messages      = state.get("messages", [])
+    pending_agent = state.get("pending_agent")
+    last_human    = next((m for m in reversed(messages) if isinstance(m, HumanMessage)), None)
 
-    active_leave_steps = {
-        "awaiting_leave_type", "awaiting_dates",
-        "awaiting_to_date", "awaiting_remarks", "awaiting_submission"
-    }
+    if pending_agent and last_human:
+        user_text = (last_human.content or "").strip()
+        if _is_confirmation_reply(user_text):
+            logger.info(
+                f"[supervisor] confirmation '{user_text}' → "
+                f"routing back to pending agent: {pending_agent}"
+            )
+            return {
+                "next_agent":    pending_agent,
+                "agent_queue":   [],
+                "pending_agent": None,  # ← clear after routing
+                "reason":        f"confirmation reply to {pending_agent}",
+            }
 
-    EXPLICIT_LEAVE_TRIGGERS = [
-        "apply leave", "apply for leave", "apply the leave",
-        "i want to apply", "submit leave", "request leave",
-        "book leave", "i need a day off", "need leave",
-        "apply casual", "apply sick", "apply earned",
-        "raise a leave", "put in leave", "request time off"
-    ]
+    # ── 3. Normal LLM planning ────────────────────────────────────────────────
+    try:
+        decision: SupervisorQueue = await get_queue_supervisor().ainvoke(
+            [SystemMessage(content=_build_supervisor_prompt())]
+            + messages[-6:]
+        )
 
-    EXPLICIT_MAIL_TRIGGERS = [
-        "draft", "compose", "send mail", "send email",
-        "write mail", "write email", "write a mail", "write an email",
-        "send a mail", "send an email", "mail to", "email to",
-        "shoot a mail", "shoot an email",
-        "check mail", "check email", "show mail", "show email",
-        "read mail", "read email", "recent mail", "recent email",
-        "my inbox", "fetch mail", "fetch email",
-        "reply to", "unread mail", "unread email",
-    ]
+        display_to_internal = get_display_to_internal_map()
+        queue = [
+            display_to_internal.get(a, "hr_agent")
+            for a in (decision.agents or [])
+        ]
 
-    def is_explicit_leave(msg: str) -> bool:
-        msg_lower = msg.lower().strip()
-        return any(phrase in msg_lower for phrase in EXPLICIT_LEAVE_TRIGGERS)
+        seen:        set[str]  = set()
+        dedup_queue: list[str] = []
+        for a in queue:
+            if a not in seen:
+                seen.add(a)
+                dedup_queue.append(a)
+        queue = dedup_queue
 
-    def is_explicit_mail(msg: str) -> bool:
-        msg_lower = msg.lower().strip()
-        return any(phrase in msg_lower for phrase in EXPLICIT_MAIL_TRIGGERS)
+        next_agent = queue.pop(0) if queue else None
+        logger.info(
+            f"[supervisor] planned={decision.agents} "
+            f"mapped={queue} reason='{decision.reason}' first={next_agent}"
+        )
 
-    # Case 1: Active interrupt — skip guardrail
-    if leave_step in active_leave_steps:
-        print(f">>> interrupt pending — skipping guardrail")
-        return {"intent": "apply_leave", "responded": False}
-
-    # Case 2: Explicit leave request
-    if is_explicit_leave(latest_user_msg):
-        print(f">>> explicit leave request detected — routing directly to leave_node")
         return {
-            "intent": "apply_leave",
-            "active_intent": "apply_leave",
-            "responded": False,
+            "next_agent":    next_agent,
+            "agent_queue":   queue,
+            "agent_history": [next_agent] if next_agent else [],
+            "reason":        decision.reason,
         }
 
-    # Case 2b: Explicit mail request
-    if is_explicit_mail(latest_user_msg):
-        print(f">>> explicit mail request detected — routing directly to assistant")
+    except GraphInterrupt:
+        raise
+    except Exception as e:
+        logger.error(f"[supervisor] Error: {e}")
         return {
-            "intent": "Assistant",
-            "active_intent": "Assistant",
-            "responded": False,
+            "next_agent":  None,
+            "agent_queue": [],
+            "reason":      f"Fallback due to error: {e}",
+            "messages":    [AIMessage(content="I'm sorry, I encountered an error. Please try again.")],
         }
 
-    # Case 2c: Already in an assistant conversation — skip guardrail for follow-ups
-    if active_intent == "Assistant":
-        print(f">>> active_intent=Assistant — skipping guardrail for follow-up")
+
+# ── Guard ──────────────────────────────────────────────────────────────────────
+
+async def guard_node(state: State) -> dict:
+    messages     = state.get("messages", [])
+    last_message = messages[-1] if messages else None
+
+    if not last_message or not isinstance(last_message, HumanMessage):
+        return {"responded": False}
+
+    try:
+        guardrails  = get_rails()
+        res         = await guardrails.generate_async(
+            messages=[{"role": "user", "content": last_message.content}]
+        )
+        output_text = res.get("content", "").strip() if isinstance(res, dict) else str(res).strip()
+        PASSTHROUGH = {"Passing your request to the supervisor..."}
+
+        if output_text and output_text not in PASSTHROUGH:
+            return {
+                "responded":     True,
+                "messages":      [AIMessage(content=output_text)],
+                "agent_history": [],
+                "next_agent":    None,
+                "agent_queue":   [],
+                "pending_agent": None,
+            }
+
         return {
-            "intent": "Assistant",
-            "active_intent": "Assistant",
-            "responded": False,
+            "responded":     False,
+            "agent_history": [],
+            "next_agent":    None,
+            "agent_queue":   [],
         }
 
-    # Case 3: Run guardrail
-    input_messages = [{"role": "user", "content": latest_user_msg}]
-    print(f"Input to Guardrail: {input_messages}")
+    except GraphInterrupt:
+        raise
+    except Exception as e:
+        import traceback
+        logger.error(f"[guard] generate_async failed: {e}")
+        logger.error(traceback.format_exc())
+        return {"responded": False, "agent_history": [], "next_agent": None, "agent_queue": []}
 
-    res = await guardrails.generate_async(
-        messages=input_messages,
-        options=GenerationOptions(
-            output_vars=True,
-            log={
-                "activated_rails": False,
-                "llm_calls": False,
-                "internal_events": True,
-                "colang_history": False,
-            },
-            rails=["input", "dialog"],
-        ),
+
+# ── Mail Agent ─────────────────────────────────────────────────────────────────
+
+async def mail_agent(state: State) -> dict:
+    all_tools    = await get_all_tools_for_user(state.get("emp_code"))
+    mail_tools   = get_tools_for_agent("mail_agent", all_tools)
+    pipeline     = get_pipeline()
+    current_date = datetime.datetime.now().strftime("%A, %d %B %Y %H:%M:%S")
+
+    logger.info(f"[mail_agent] tools={[t.name for t in mail_tools]}")
+
+    # ── No Zoho tools — draft-only mode ──────────────────────────────────────
+    if not mail_tools:
+        llm    = pipeline.vertex_llm
+        system = (
+            f"You are MACOM Mail Agent. TODAY: {current_date}\n\n"
+            f"You do not have Zoho Mail access.\n"
+            f"ONLY help draft emails — you cannot send, read, or fetch any.\n"
+            f"Write a complete professional email.\n"
+            f"End with: 'Note: To send this email, please ask your admin to configure Zoho Mail access.'"
+        )
+        try:
+            response = await llm.ainvoke([SystemMessage(content=system)] + state.get("messages", [])[-10:])
+            _log_response(response)
+            return {
+                "messages":      [response],
+                "pending_agent": None,  # draft-only — no confirmation needed
+            }
+        except GraphInterrupt:
+            raise
+        except Exception as e:
+            logger.error(f"[mail_agent] draft-only error: {e}")
+            return {
+                "messages":      [AIMessage(content=f"Sorry, an error occurred: {e}")],
+                "pending_agent": None,
+            }
+
+    # ── Ensure accountId fetched before LLM sees any prompt ──────────────────
+    if not state.get("zoho_account_id"):
+        logger.info("[mail_agent] zoho_account_id missing — injecting getMailAccounts call")
+        return {
+            "messages": [AIMessage(
+                content    = "",
+                tool_calls = [{"name": "ZohoMail_getMailAccounts", "args": {}, "id": str(uuid.uuid4()), "type": "tool_call"}]
+            )],
+            # Do not touch pending_agent here — mid-flow tool call, not a confirmation
+        }
+
+    # ── Full mail agent mode ──────────────────────────────────────────────────
+    llm    = pipeline.vertex_llm.bind_tools(mail_tools)
+    system = MAIL_AGENT_SYSTEM.format(
+        zoho_account_id   = state.get("zoho_account_id")   or "unknown",
+        zoho_folder_id    = state.get("zoho_folder_id")    or "unknown",
+        zoho_from_address = state.get("zoho_from_address") or "unknown",
+        current_date      = current_date,
     )
 
-    intents = [
-        e for e in (res.log.internal_events or [])
-        if e.get("type") == "UserIntent"
-    ]
-    detected_intent = intents[-1].get("intent") if intents else None
-    print(f"Detected intent: {detected_intent}")
+    try:
+        response = await llm.ainvoke([SystemMessage(content=system)] + state.get("messages", [])[-14:])
+        _log_response(response)
 
-    output_text = res.response[-1].get("content", "") if res.response else ""
+        # Normalise any confirmation variant to one canonical phrase
+        # and set pending_agent so supervisor routes back here on "yes"/"no"
+        if response.content and not getattr(response, "tool_calls", None):
+            text = response.content if isinstance(response.content, str) else str(response.content)
 
-    PASSTHROUGH_MESSAGES = {
-        "Passing your request to the assistant...",
-        "Passing your request to the leave system..."
-    }
+            if _agent_is_asking_confirmation(text, "mail_agent"):
+                clean = "\n".join(
+                    line for line in text.splitlines()
+                    if not _agent_is_asking_confirmation(line, "mail_agent")
+                ).strip()
+                return {
+                    "messages":      [AIMessage(content=clean + "\n\nShall I send this email? (Yes / No)")],
+                    "pending_agent": "mail_agent",  # ← supervisor will route back here on yes/no
+                }
 
-    # Case 4: Guardrail blocked
-    if output_text and output_text not in PASSTHROUGH_MESSAGES:
-        print(f">>> Case 4 fired: output_text='{output_text}' detected_intent={detected_intent} active_intent={active_intent}")
-        if active_intent == "Assistant" or detected_intent == "Assistant":
-            print(">>> guardrail blocked but intent=Assistant — continuing to assistant")
+            # Normal final answer — clear pending
             return {
-                "intent": "Assistant",
-                "active_intent": "Assistant",
-                "responded": False,
+                "messages":      [response],
+                "pending_agent": None,
             }
-        print(f">>> BLOCKING with: {output_text}")
+
+        # Has tool calls — mid-flow, don't touch pending_agent
+        return {"messages": [response]}
+
+    except GraphInterrupt:
+        raise
+    except Exception as e:
+        logger.error(f"[mail_agent] Error: {e}")
         return {
-            "messages": [AIMessage(content=output_text)],
-            "intent": detected_intent or active_intent,
-            "responded": True,
+            "messages":      [AIMessage(content=f"Sorry, an error occurred: {e}")],
+            "pending_agent": None,
         }
 
-    # Case 5: apply_leave detected mid-assistant-conversation
-    if detected_intent == "apply_leave" and active_intent == "Assistant":
-        print(">>> non-explicit apply_leave during assistant conversation — staying in assistant")
+
+def _log_response(response) -> None:
+    logger.info(f"[agent] content   : {repr((response.content or '')[:300])}")
+    logger.info(f"[agent] tool_calls: {getattr(response, 'tool_calls', [])}")
+    logger.info(f"[agent] finish    : {response.response_metadata.get('finish_reason')}")
+
+
+# ── HR Agent ───────────────────────────────────────────────────────────────────
+
+async def hr_agent(state: State) -> dict:
+    all_tools = await get_all_tools_for_user(state.get("emp_code"))
+    hr_tools  = get_tools_for_agent("hr_agent", all_tools)
+    llm       = get_pipeline().vertex_llm.bind_tools(hr_tools)
+
+    system = HR_AGENT_SYSTEM.format(
+        current_date=datetime.datetime.now().strftime("%A, %d %B %Y %H:%M:%S")
+    )
+
+    try:
+        response = await llm.ainvoke(
+            [SystemMessage(content=system)] + state.get("messages", [])[-6:]
+        )
+        logger.info(f"[hr_agent] tool_calls={getattr(response, 'tool_calls', None)}")
+
+        # Check if hr_agent is asking the user a yes/no question
+        text = ""
+        if response.content and not getattr(response, "tool_calls", None):
+            text = response.content if isinstance(response.content, str) else str(response.content)
+
+        if text and _agent_is_asking_confirmation(text, "hr_agent"):
+            return {
+                "messages":      [response],
+                "pending_agent": "hr_agent",  # ← route back here on yes/no
+            }
+
+        # Normal answer — clear pending_agent
         return {
-            "intent": "Assistant",
-            "active_intent": "Assistant",
-            "responded": False,
+            "messages":      [response],
+            "pending_agent": None,
         }
 
-    # Case 6: Resolve final intent
-    VAGUE_INTENTS = {"follow_up", "ask off topic", None}
-
-    # FIX 5: Reset active intent properly when leave is done
-    if leave_step in {"cancelled", "completed", "failed"}:
-        previous_active_intent = "general"
-    else:
-        previous_active_intent = active_intent
-
-    if detected_intent not in VAGUE_INTENTS:
-        final_intent = detected_intent
-        new_active_intent = detected_intent
-    else:
-        final_intent = previous_active_intent
-        new_active_intent = previous_active_intent
-
-    print(f"Final intent: {final_intent} | active_intent: {new_active_intent}")
-
-    return {
-        "intent": final_intent,
-        "active_intent": new_active_intent,
-        "responded": False,
-    }
+    except GraphInterrupt:
+        raise
+    except Exception as e:
+        logger.error(f"[hr_agent] Error: {e}")
+        return {
+            "messages":      [AIMessage(content=f"Sorry, an error occurred: {e}")],
+            "pending_agent": None,
+        }
 
 
-def route_after_classification(state: State) -> str:
-    print(f">>> routing: responded={state.get('responded')}, intent={state.get('intent')}")
+# ── Routing ────────────────────────────────────────────────────────────────────
 
-    if state.get("responded", False):
+def guard_condition(state: State) -> str:
+    return END if state.get("responded", False) else "supervisor"
+
+
+def supervisor_route(state: State) -> str:
+    """Routes supervisor output to correct agent node or END."""
+    next_agent = state.get("next_agent")
+    if not next_agent or next_agent in ("FINISH", "", None):
         return END
 
-    leave_step = state.get("leave_step")
+    display_to_internal = get_display_to_internal_map()
+    resolved            = display_to_internal.get(next_agent, next_agent)
+    VALID_NODES         = set(AGENT_REGISTRY.keys())
 
-    active_leave_steps = {
-        "awaiting_leave_type",
-        "awaiting_dates",
-        "awaiting_to_date",
-        "awaiting_remarks",
-        "awaiting_submission"
-    }
-
-    if leave_step in active_leave_steps:
-        return "Leave_Application"
-
-    # FIX 6: Removed redundant duplicate `if leave_step in {...}` check;
-    # consolidated into a single clean routing block
-    intent = state.get("intent", "general")
-    if intent == "apply_leave":
-        return "Leave_Application"
-    return "assistant"
+    if resolved not in VALID_NODES:
+        logger.warning(f"[supervisor_route] unknown agent '{resolved}' → END")
+        return END
+    return resolved
 
 
-def _smart_history(messages: list) -> list:
-    """
-    Return a window of messages that always includes:
-    - The last HumanMessage and everything after it (tool calls + tool results)
-    - Up to 4 previous messages for context
-    Never cuts off mid tool-call/result cycle.
-    """
-    last_human_idx = None
-    for i in range(len(messages) - 1, -1, -1):
-        if isinstance(messages[i], HumanMessage):
-            last_human_idx = i
-            break
+def agent_done_condition(state: State) -> str:
+    """Shared condition for mail_agent and hr_agent — go to tools or END."""
+    messages = state.get("messages", [])
+    last_msg = messages[-1] if messages else None
 
-    if last_human_idx is None:
-        return messages[-6:]
+    if last_msg is None:
+        return END
 
-    start = max(0, last_human_idx - 4)
-    return messages[start:]
-
-
-def _name_from_email(email: str) -> str:
-    try:
-        local = email.split("@")[0]
-        return " ".join(p.capitalize() for p in local.split("."))
-    except Exception:
-        return email
-
-
-def _extract_draft_from_messages(messages: list) -> dict | None:
-    """Find the most recent AI draft message and extract to/subject/content."""
-    import re
-    for msg in reversed(messages):
-        if not isinstance(msg, AIMessage):
-            continue
-        content = msg.content if isinstance(msg.content, str) else ""
-        if "shall i send" not in content.lower():
-            continue
-        to = re.search(r"To:\s*([\w.@+\-]+)", content)
-        subject = re.search(r"Subject:\s*(.+)", content)
-        body_match = re.search(
-            r"(?:Dear|Hi|Hello).+?(?=Shall I send)",
-            content,
-            re.DOTALL | re.IGNORECASE
+    if getattr(last_msg, "tool_calls", None):
+        # Check if the most recent tool result was an error — if so, stop
+        last_tool_msg = next(
+            (m for m in reversed(messages) if isinstance(m, ToolMessage)),
+            None
         )
-        return {
-            "toAddress": to.group(1).strip() if to else "",
-            "subject": subject.group(1).strip() if subject else "(no subject)",
-            "content": body_match.group(0).strip() if body_match else content,
-        }
-    return None
-
-
-def _build_system_prompt(
-    current_date: str,
-    zoho_account_id: str = None,
-    zoho_from_address: str = None,
-    zoho_sender_name: str = None,
-) -> str:
-    zoho_session = (
-        f"ZOHO SESSION (already authenticated):\n"
-        f"  accountId   = '{zoho_account_id}'\n"
-        f"  fromAddress = '{zoho_from_address}'\n"
-        f"  senderName  = '{zoho_sender_name}'\n"
-        f"Use these directly. Do NOT call ZohoMail_getMailAccounts.\n"
-        f"Always sign emails as '{zoho_sender_name}'.\n"
-    ) if zoho_account_id else (
-        "ZOHO MAIL: Call ZohoMail_getMailAccounts FIRST to get accountId and fromAddress "
-        "before any mail operation. Never guess or hardcode these values.\n"
-    )
-    return (
-        f"You are MACOM AI, an HR Assistant for MACOM employees.\n"
-        f"TODAY'S DATE IS {current_date}. Use this directly — never ask the user for the date.\n\n"
-        f"{zoho_session}\n"
-        "CAPABILITIES — use the right tool for each task:\n"
-        "- HR/Policy questions → call Policy_RAG_Implementation\n"
-        "- Weather → call Current_Date_weather with city name\n"
-        "- News → call Get_Top_News with category\n"
-        "- Email (read/send/reply) → use Zoho tools per rules below\n\n"
-        "EMAIL RULES:\n"
-        "- NEVER ask the user for accountId, folderId, messageId or any technical ID — fetch them via tools\n"
-        "- NEVER ask the user for subject or content if they already described the email — infer and draft it\n"
-        "- folderId: always call ZohoMail_getAllFolders to get it, never use folder name as ID\n"
-        "- ZohoMail_getAllFolders: include 'fields': 'folderId,folderName' in query_params\n"
-        "- ZohoMail_listEmails: include 'fields': 'messageId,subject,sender,receivedTime' in query_params\n"
-        "- folderId goes in query_params for other mail tools, never in path_variables\n"
-        "- sortorder: boolean false, not string\n"
-        "- SENDING: always show a full draft preview first and ask 'Shall I send this? (Yes/No)' — "
-        "NEVER call ZohoMail_sendEmail before user confirms Yes\n"
-        "- REPLYING: same — show draft, wait for Yes, then send\n"
-    )
-
-
-def _extract_zoho_account(messages: list) -> tuple:
-    """Scan ToolMessage history for a prior ZohoMail_getMailAccounts result."""
-    for msg in reversed(messages):
-        # FIX 7: ToolMessage is now imported at the top — removed redundant local import
-        if not isinstance(msg, ToolMessage) or msg.name != "ZohoMail_getMailAccounts":
-            continue
-        try:
-            data = json.loads(msg.content) if isinstance(msg.content, str) else msg.content
-            accounts = data.get("data", []) if isinstance(data, dict) else []
-            if accounts:
-                acct = accounts[0]
-                account_id = str(acct.get("accountId", ""))
-                from_address = (
-                    acct.get("fromAddress")
-                    or acct.get("mailboxAddress")
-                    or (acct.get("sendMailDetails") or [{}])[0].get("fromAddress", "")
-                )
-                sender_name = acct.get("displayName", "") or _name_from_email(from_address)
-                return account_id, from_address, sender_name
-        except Exception:
-            pass
-    return None, None, None
-
-
-_FOLDER_ASK_PHRASES = [
-    "folder id", "folderid", "which folder", "folder name",
-    "inbox, sent", "inbox or sent", "e.g., inbox", "specify which folder",
-    "please specify", "could you please specify",
-]
-
-_FROM_ADDRESS_ERROR_PHRASES = [
-    "given fromaddress not exists",
-    "fromaddress not exists",
-    "fromaddress is not recognized",
-    "from address not exists",
-]
-
-_FROM_ADDRESS_ERROR_MSG = (
-    "Unable to send the email. Your Zoho sender address ({}) is not validated. "
-    "Please go to Zoho Mail Settings → Send Mail → validate your email address, then try again."
-)
-
-
-def _is_asking_for_folder(response) -> bool:
-    if getattr(response, "tool_calls", None):
-        return False
-    content = response.content if isinstance(response.content, str) else ""
-    lower = content.lower()
-    return any(phrase in lower for phrase in _FOLDER_ASK_PHRASES)
-
-
-def _has_from_address_error(response) -> bool:
-    """Detect when the LLM is reporting a fromAddress error from a prior tool result."""
-    if getattr(response, "tool_calls", None):
-        return False
-    content = response.content if isinstance(response.content, str) else ""
-    lower = content.lower()
-    return any(phrase in lower for phrase in _FROM_ADDRESS_ERROR_PHRASES)
-
-
-async def assistant_node(state: State) -> dict:
-    """LLM node that binds tools and generates a response."""
-    pipeline = get_pipeline()
-    emp_code = state.get("emp_code")
-    all_tools = await get_all_tools_for_user(emp_code)
-    llm = pipeline.vertex_llm.bind_tools(all_tools)
-    current_date = datetime.datetime.now().strftime("%A, %d %B %Y")
-    zoho_names = [t.name for t in all_tools if "Zoho" in t.name or "zoho" in t.name]
-    print(f"[ASSISTANT] emp={emp_code} zoho_tools={zoho_names}")
-
-    zoho_account_id = state.get("zoho_account_id")
-    zoho_from_address = state.get("zoho_from_address")
-    zoho_sender_name = None
-
-    if not zoho_account_id:
-        zoho_account_id, zoho_from_address, zoho_sender_name = \
-            _extract_zoho_account(state.get("messages", []))
-
-    # FIX 8: Only prefetch Zoho account if not already cached in state,
-    # avoiding a redundant API call every single turn
-    if not zoho_account_id:
-        zoho_tool = next((t for t in all_tools if t.name == "ZohoMail_getMailAccounts"), None)
-        print(f"[ASSISTANT] zoho_tool_found={zoho_tool is not None}")
-        if zoho_tool:
+        if last_tool_msg:
             try:
-                result = await zoho_tool.ainvoke({"args": {}, "id": "prefetch"})
-                raw = result.content if hasattr(result, "content") else result
-                print(f"[ZOHO_FETCH] FULL raw={str(raw)[:2000]}")
-                data = json.loads(raw) if isinstance(raw, str) else raw
-                accts = data.get("data", []) if isinstance(data, dict) else []
-                if accts:
-                    acct = accts[0]
-                    zoho_account_id = str(acct.get("accountId", ""))
-                    zoho_from_address = (
-                        acct.get("fromAddress")
-                        or acct.get("mailboxAddress")
-                        or (acct.get("sendMailDetails") or [{}])[0].get("fromAddress", "")
-                    )
-                    zoho_sender_name = acct.get("displayName", "") or _name_from_email(zoho_from_address)
-                    print(f"[ZOHO_FETCH] accountId={zoho_account_id} fromAddress={zoho_from_address}")
-                else:
-                    print(f"[ZOHO_FETCH] no accounts: {data}")
-            except Exception as e:
-                print(f"[ZOHO_FETCH] FAILED: {e}")
-    else:
-        print(f"[ASSISTANT] using cached zoho_account_id={zoho_account_id}")
+                content = last_tool_msg.content or ""
+                data    = json.loads(content) if isinstance(content, str) else content
+                if isinstance(data, dict):
+                    status = data.get("status", {})
+                    code   = status.get("code") if isinstance(status, dict) else None
+                    if code and int(code) >= 400:
+                        logger.warning(
+                            f"[agent_done_condition] tool error code={code} "
+                            f"tool={last_tool_msg.name} — blocking retry → END"
+                        )
+                        return END
+            except Exception:
+                pass
+        return "tools"
 
-    if zoho_account_id and not zoho_sender_name:
-        zoho_sender_name = _name_from_email(zoho_from_address or "")
-
-    # FIX 9: Mail-block check — only block if Zoho tools are completely absent
-    # (previously this could block even when tools existed but fetch temporarily failed)
-    if not zoho_account_id:
-        zoho_tool_exists = any(t.name == "ZohoMail_getMailAccounts" for t in all_tools)
-        if not zoho_tool_exists:
-            logger.warning("[assistant_node] No Zoho tools found for emp_code=%s", emp_code)
-            last_human = next(
-                (m.content.lower() for m in reversed(state.get("messages", [])) if isinstance(m, HumanMessage)),
-                ""
+    if isinstance(last_msg, AIMessage):
+        content = last_msg.content or ""
+        if isinstance(content, list):
+            content = " ".join(
+                b.get("text", "") for b in content if isinstance(b, dict)
             )
-            MAIL_WORDS = ["mail", "email", "draft", "send", "inbox", "reply", "compose"]
-            if any(w in last_human for w in MAIL_WORDS):
-                return {"messages": [AIMessage(
-                    content="Your Zoho Mail account is not connected. Please ask your admin to configure the Zoho MCP key."
-                )]}
+        if content.lower().startswith("sorry") or "error occurred" in content.lower():
+            logger.warning("[agent_done_condition] error response → END")
+            return END
 
-    history = _smart_history(state["messages"])
-    has_human = any(isinstance(m, HumanMessage) for m in history)
-    if not has_human:
-        return {"messages": [AIMessage(content="I'm here to help! What would you like to know?")]}
+        # Normal final answer (including confirmation prompts) → END
+        # supervisor will handle routing back if pending_agent is set
+        return END
 
-    # Intercept send confirmation — build tool call directly, no LLM
-    last_human_msg = next(
-        (m.content.strip().lower() for m in reversed(state["messages"]) if isinstance(m, HumanMessage)),
-        ""
-    )
-    last_human_index = next(
-        (i for i in range(len(state["messages"]) - 1, -1, -1)
-         if isinstance(state["messages"][i], HumanMessage)),
-        None
-    )
-    has_messages_after_last_human = (
-        last_human_index is not None
-        and len(state["messages"]) - last_human_index - 1 > 0
-    )
-    if last_human_msg in ("yes", "y", "send it", "send", "confirm") and zoho_account_id and not has_messages_after_last_human:
-        draft = state.get("pending_email") or _extract_draft_from_messages(state["messages"])
-        if draft and draft.get("toAddress"):
-            print(f"[SEND_INTERCEPT] Building send call: to={draft['toAddress']} subject={draft['subject']}")
-            return {
-                "messages": [AIMessage(
-                    content="",
-                    tool_calls=[{
-                        "id": str(uuid.uuid4()),
-                        "name": "ZohoMail_sendEmail",
-                        "args": {
-                            "path_variables": {"accountId": zoho_account_id},
-                            "body": {
-                                # FIX 10: All send fields go inside body dict, not at top-level,
-                                # consistent with how DynamicToolNode patches tool calls
-                                "fromAddress": zoho_from_address,
-                                "toAddress": draft["toAddress"],
-                                "subject": draft["subject"],
-                                "content": draft["content"],
-                                "mailFormat": "html",
-                            },
-                        },
-                    }],
-                )],
-                "pending_email": None,
-            }
+    return END
 
-    system_content = _build_system_prompt(
-        current_date,
-        zoho_account_id=zoho_account_id,
-        zoho_from_address=zoho_from_address,
-        zoho_sender_name=zoho_sender_name,
-    )
 
-    logger.info("[assistant_node] system_prompt=\n%s", system_content)
-    logger.info(
-        "[assistant_node] history_msgs=%s",
-        [type(m).__name__ + ':' + str(m.content)[:60] for m in history]
-    )
+def tools_route_back(state: State) -> str:
+    """Route shared tool results back to whichever agent made the call."""
+    for msg in reversed(state.get("messages", [])):
+        if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
+            tool_names = [tc.get("name", "") for tc in msg.tool_calls]
+            if any("zoho"  in t.lower() for t in tool_names): return "mail_agent"
+            if any("leave" in t.lower() for t in tool_names): return "leave_agent"
+            return "hr_agent"
+    return "supervisor"
 
-    messages = [SystemMessage(content=system_content)] + history
-    response = await llm.ainvoke(messages)
 
-    # Guard: LLM asked user for folder — force ZohoMail_getAllFolders
-    if _is_asking_for_folder(response) and zoho_account_id:
-        last_human = next(
-            (m.content.lower() for m in reversed(state.get("messages", [])) if isinstance(m, HumanMessage)),
-            ""
-        )
-        SEND_WORDS = ["send", "draft", "compose", "write", "mail to", "email to"]
-        is_send_request = any(w in last_human for w in SEND_WORDS)
-        if not is_send_request:
-            logger.warning("[assistant_node] LLM asked user for folder — forcing ZohoMail_getAllFolders call")
-            return {"messages": [AIMessage(
-                content="",
-                tool_calls=[{
-                    "id": str(uuid.uuid4()),
-                    "name": "ZohoMail_getAllFolders",
-                    "args": {
-                        "path_variables": {"accountId": zoho_account_id},
-                        "body": {"fields": "folderId,folderName"},
-                    },
-                }],
-            )]}
-
-    # Guard: fromAddress error — show clear actionable message
-    if _has_from_address_error(response):
-        return {"messages": [AIMessage(
-            content=_FROM_ADDRESS_ERROR_MSG.format(zoho_from_address or "unknown")
-        )]}
-
-    logger.info(
-        "[assistant_node] tool_calls=%s content=%s",
-        getattr(response, "tool_calls", None),
-        str(response.content)[:300],
-    )
-
-    # Persist zoho credentials + store draft if LLM just showed a preview
-    out: dict = {"messages": [response]}
-    if zoho_account_id:
-        out["zoho_account_id"] = zoho_account_id
-        out["zoho_from_address"] = zoho_from_address
-    resp_content = response.content if isinstance(response.content, str) else ""
-    if "shall i send" in resp_content.lower() and not getattr(response, "tool_calls", None):
-        draft = _extract_draft_from_messages(state["messages"] + [response])
-        if draft:
-            out["pending_email"] = draft
-            print(f"[DRAFT_STORED] to={draft.get('toAddress')} subject={draft.get('subject')}")
-    return out
-
+# ── Graph ──────────────────────────────────────────────────────────────────────
 
 def create_intent_driven_agent(checkpointer=None) -> StateGraph:
-    """Create a LangGraph agent with NeMo Guardrails integration."""
-
-    _leave_subgraph_compiled = leave_subgraph(checkpointer=checkpointer)
-
     graph = StateGraph(State)
 
-    graph.add_node("orchestrator", Orchestrator)
-    graph.add_node("assistant", assistant_node)
-    graph.add_node("leave_node", _leave_subgraph_compiled)
-    graph.add_node("tools", DynamicToolNode())
+    # ── Nodes ──────────────────────────────────────────────────────────────────
+    graph.add_node("guard",       guard_node)
+    graph.add_node("supervisor",  supervisor_node)
+    graph.add_node("mail_agent",  mail_agent)
+    graph.add_node("hr_agent",    hr_agent)
+    graph.add_node("leave_agent", leave_agent)
+    graph.add_node("tools",       DynamicToolNode())
+    graph.add_node("leave_tools", LeaveToolNode())
 
-    graph.add_edge(START, "orchestrator")
+    # ── Entry ───────────────────────────────────────────────────────────────────
+    graph.add_edge(START, "guard")
 
+    # ── Guard → Supervisor or END ───────────────────────────────────────────────
     graph.add_conditional_edges(
-        "orchestrator",
-        route_after_classification,
+        "guard", guard_condition,
+        {"supervisor": "supervisor", END: END},
+    )
+
+    # ── Supervisor → Agent or END ───────────────────────────────────────────────
+    graph.add_conditional_edges(
+        "supervisor",
+        supervisor_route,
         {
-            "assistant": "assistant",
-            "Leave_Application": "leave_node",
-            END: END,
+            "mail_agent":  "mail_agent",
+            "hr_agent":    "hr_agent",
+            "leave_agent": "leave_agent",
+            END:           END,
         },
     )
 
-    graph.add_conditional_edges("assistant", tools_condition)
-    graph.add_edge("tools", "assistant")
+    # ── Agents → Tools or END ───────────────────────────────────────────────────
+    graph.add_conditional_edges(
+        "mail_agent", agent_done_condition,
+        {"tools": "tools", END: END},
+    )
+    graph.add_conditional_edges(
+        "hr_agent", agent_done_condition,
+        {"tools": "tools", END: END},
+    )
+
+    # ── Shared tools → back to calling agent ───────────────────────────────────
+    graph.add_conditional_edges(
+        "tools", tools_route_back,
+        {
+            "mail_agent":  "mail_agent",
+            "hr_agent":    "hr_agent",
+            "leave_agent": "leave_agent",
+            "supervisor":  "supervisor",
+        },
+    )
+
+    # ── Leave agent — owns its full flow, goes to END directly ─────────────────
+    graph.add_conditional_edges(
+        "leave_agent", leave_agent_condition,
+        {
+            "leave_tools": "leave_tools",
+            END:           END,
+        },
+    )
+    graph.add_edge("leave_tools", "leave_agent")
 
     return graph.compile(checkpointer=checkpointer)

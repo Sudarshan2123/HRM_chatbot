@@ -5,7 +5,8 @@ models:
     engine: openai
     model: gemma3:latest
     parameters:
-      base_url: "http://localhost:11434/v1"
+      # base_url: "http://localhost:11434/v1"
+      base_url: "http://ollama:11434/v1"
       api_key: "ollama"     # Faster generation for yes/no tasks
 
 rails:
@@ -16,13 +17,12 @@ rails:
   dialog:
     flows:
       - greeting          # handles Hi/Hello directly, no LLM
-      - assistant query   # passes through to LangGraph, no LLM
-      - apply leave
+      - user data   # passes through to LangGraph, no LLM
       - off topic       # passes through to LangGraph, no LLM
     user_messages:
       embeddings_only: True                        # no LLM for intent classification
-      embeddings_only_similarity_threshold: 0.5
-      embeddings_only_fallback_intent: "ask off topic"
+      embeddings_only_similarity_threshold: 0.7
+      embeddings_only_fallback_intent: "ask data"
     # single_call:
     #   enabled: True
 

@@ -17,6 +17,7 @@ MCP_CONFIGS = [
         "name": "remote_internal_server",
         "transport": "streamable-http",
         "url": "http://10.192.5.51:6000/mcp",
+        # "url": "http://nginx-mcp-server-1:6000/mcp"
     },
 ]
 
